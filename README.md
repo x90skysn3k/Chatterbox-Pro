@@ -29,13 +29,42 @@ curl http://localhost:8004/status/abc12345
 curl http://localhost:8004/result/abc12345 --output speech.wav
 ```
 
-## Quick Start (Manual)
+## Quick Start (Linux/CUDA)
 
 ```bash
 pip install -r requirements.txt
 ./install-patches.sh   # Apply local fixes over pip package
 python3 server.py      # Starts on port 8004
 ```
+
+## Quick Start (Mac — Apple Silicon)
+
+Runs on M1/M2/M3/M4 via MPS (Metal Performance Shaders). Slower than CUDA (~10x) but fully functional.
+
+```bash
+# Create venv
+python3 -m venv venv && source venv/bin/activate
+
+# Install PyTorch with MPS support
+pip install torch torchaudio
+
+# Install deps
+pip install -r requirements.txt
+./install-patches.sh
+
+# Set MPS-specific env vars
+export KMP_DUPLICATE_LIB_OK=TRUE
+export PYTORCH_ENABLE_MPS_FALLBACK=1
+
+# Start server
+python3 server.py
+```
+
+**Mac notes:**
+- `faster-whisper` requires CUDA — falls back to OpenAI Whisper automatically
+- Parallel workers limited to 1 on MPS (can't parallelize GPU ops)
+- Generation is ~10x slower than a P40 but works for testing and light use
+- Model downloads ~3GB on first run (cached in `~/.cache/huggingface`)
 
 ---
 
