@@ -5,3 +5,7 @@ __pycache__
 
 # VS Code
 *.code-workspace
+venv/
+*.wav
+__pycache__/
+*.pyc
