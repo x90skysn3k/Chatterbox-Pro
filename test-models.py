@@ -26,37 +26,37 @@ DEFAULT_VOICE = os.path.join(VOICES_DIR, os.environ.get("DEFAULT_VOICE", "defaul
 TESTS = [
     {
         "id": "simple-narration",
-        "text": "Most traders lose money not because they lack skill, but because they lack discipline.",
+        "text": "The most important thing you can do is start before you feel ready. Perfection is the enemy of progress.",
         "difficulty": "easy",
     },
     {
         "id": "emotional-range",
-        "text": "He watched his account drop from fifty thousand to twelve hundred in six weeks. His wife didn't know. His kids didn't know. He sat in his car in the driveway for forty minutes before walking inside.",
+        "text": "She spent three years building the company from nothing. Then one phone call changed everything. The funding fell through. Her team didn't know. She sat alone in her office for an hour before walking out to face them.",
         "difficulty": "hard",
     },
     {
         "id": "short-punchy",
-        "text": "Stop. Think about that for a second. Your broker made money. The exchange made money. You lost money.",
+        "text": "Stop. Think about that for a second. They had the data. They had the tools. They still got it wrong.",
         "difficulty": "medium",
     },
     {
         "id": "numbers-and-stats",
-        "text": "Exposed after three hundred days of trading. Ninety seven percent of retail traders lose money within their first year.",
+        "text": "In two thousand twenty four, global internet users surpassed five point four billion. That is roughly sixty seven percent of the world population.",
         "difficulty": "medium",
     },
     {
         "id": "proper-names",
-        "text": "Jesse Livermore once said that the market is designed to fool most of the people, most of the time. Paul Tudor Jones agreed.",
+        "text": "Leonardo da Vinci once said that simplicity is the ultimate sophistication. Albert Einstein would have agreed wholeheartedly.",
         "difficulty": "hard",
     },
     {
         "id": "technical-terms",
-        "text": "The Vix spiked above thirty five while the S and P futures were limit down. Every algos risk model screamed to liquidate.",
+        "text": "The API latency spiked above two hundred milliseconds while the load balancer was redistributing traffic. Every monitoring dashboard lit up red.",
         "difficulty": "hard",
     },
     {
         "id": "long-complex",
-        "text": "What separates the five percent who survive from the ninety five percent who blow up isn't intelligence, it isn't access to better tools, and it certainly isn't some secret indicator that nobody else knows about, it's the ability to sit on your hands when every fiber of your being screams at you to click that button.",
+        "text": "What separates the people who succeed from the people who don't isn't talent, it isn't access to better resources, and it certainly isn't some secret formula that nobody else knows about, it's the willingness to keep showing up when every part of you wants to quit.",
         "difficulty": "hard",
     },
 ]
