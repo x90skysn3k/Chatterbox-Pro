@@ -187,16 +187,9 @@ def _get_turbo_model():
             if _turbo_model is None:
                 logger.info("Loading Chatterbox Turbo model...")
                 try:
-                    from chatterbox.src.chatterbox.tts import ChatterboxTTS, REPO_ID
-                    import chatterbox.src.chatterbox.tts as _tts_module
-                    # Temporarily override REPO_ID to load turbo variant
-                    _orig_repo_id = _tts_module.REPO_ID
-                    _tts_module.REPO_ID = "ResembleAI/chatterbox-turbo"
-                    try:
-                        device = "cuda" if __import__('torch').cuda.is_available() else "cpu"
-                        _turbo_model = ChatterboxTTS.from_pretrained(device=device)
-                    finally:
-                        _tts_module.REPO_ID = _orig_repo_id
+                    from chatterbox.src.chatterbox.tts import ChatterboxTTS
+                    device = "cuda" if __import__('torch').cuda.is_available() else "cpu"
+                    _turbo_model = ChatterboxTTS.from_pretrained_turbo(device=device)
                     if hasattr(_turbo_model, "eval"):
                         _turbo_model.eval()
                     logger.info("Turbo model loaded!")

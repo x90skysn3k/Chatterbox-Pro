@@ -115,6 +115,46 @@ class ChatterboxTTS:
             local_path = hf_hub_download(repo_id=REPO_ID, filename=fpath)
         return cls.from_local(Path(local_path).parent, device)
 
+    @classmethod
+    def from_pretrained_turbo(cls, device) -> 'ChatterboxTTS':
+        """Load Chatterbox Turbo (350M, 1-step decoder, no CFG/exaggeration)."""
+        if device == "mps" and not torch.backends.mps.is_available():
+            device = "cpu"
+        turbo_repo = "ResembleAI/chatterbox-turbo"
+        turbo_files = ["ve.safetensors", "t3_turbo_v1.safetensors", "t3_turbo_v1.yaml",
+                       "s3gen.safetensors", "tokenizer.json", "conds.pt"]
+        for fpath in turbo_files:
+            local_path = hf_hub_download(repo_id=turbo_repo, filename=fpath)
+        ckpt_dir = Path(local_path).parent
+
+        from omegaconf import OmegaConf
+        map_location = torch.device('cpu') if device in ["cpu", "mps"] else None
+
+        ve = VoiceEncoder()
+        ve.load_state_dict(load_file(ckpt_dir / "ve.safetensors"))
+        ve.to(device).eval()
+
+        # Turbo T3 uses its own config
+        t3_cfg = OmegaConf.load(ckpt_dir / "t3_turbo_v1.yaml")
+        t3 = T3(hp=t3_cfg)
+        t3_state = load_file(ckpt_dir / "t3_turbo_v1.safetensors")
+        if "model" in t3_state.keys():
+            t3_state = t3_state["model"][0]
+        t3.load_state_dict(t3_state)
+        t3.to(device).eval()
+
+        s3gen = S3Gen()
+        s3gen.load_state_dict(load_file(ckpt_dir / "s3gen.safetensors"), strict=False)
+        s3gen.to(device).eval()
+
+        tokenizer = EnTokenizer(str(ckpt_dir / "tokenizer.json"))
+
+        conds = None
+        if (builtin_voice := ckpt_dir / "conds.pt").exists():
+            conds = Conditionals.load(builtin_voice, map_location=map_location).to(device)
+
+        return cls(t3, s3gen, ve, tokenizer, device, conds=conds)
+
     # ---------- Conditionals helpers ----------
     _conds_cache: dict = {}  # class-level cache: {wav_hash: (Conditionals, hash)}
 
