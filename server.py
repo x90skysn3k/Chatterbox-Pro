@@ -43,7 +43,7 @@ logging.basicConfig(
     ],
 )
 logger = logging.getLogger("extended-server")
-logger.info(f"Logging to logs/server.log")
+logger.info("Logging to logs/server.log")
 
 # Read version
 _VERSION = "unknown"
