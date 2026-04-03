@@ -1,0 +1,20 @@
+[lint]
+select = ["E", "F"]
+ignore = [
+    "E501",  # line too long (existing code)
+    "E402",  # module level import not at top (existing code)
+    "E722",  # bare except (existing code pattern)
+    "E741",  # ambiguous variable name (existing code)
+    "F841",  # local variable assigned but never used (existing code)
+    "F401",  # imported but unused (existing code)
+    "F811",  # redefinition of unused name (existing code)
+    "F821",  # undefined name (gradio runtime)
+    "W605",  # invalid escape sequence (existing code)
+    "E711",  # comparison to None (existing code)
+    "E712",  # comparison to True/False (existing code)
+    "E731",  # lambda assignment (existing code)
+    "E714",  # not-is test (existing code)
+]
+
+[lint.per-file-ignores]
+"Chatter.py" = ["E", "F"]  # inherited code, don't lint

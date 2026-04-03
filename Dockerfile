@@ -3,14 +3,18 @@ FROM nvidia/cuda:12.4.1-runtime-ubuntu22.04
 ENV DEBIAN_FRONTEND=noninteractive
 ENV PYTHONUNBUFFERED=1
 
-# System deps
+# System deps + Python 3.12 from deadsnakes PPA (not in Ubuntu 22.04 default repos)
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    python3.12 python3.12-venv python3.12-dev python3-pip \
+    software-properties-common && \
+    add-apt-repository ppa:deadsnakes/ppa && \
+    apt-get update && apt-get install -y --no-install-recommends \
+    python3.12 python3.12-venv python3.12-dev \
     ffmpeg git curl \
     && rm -rf /var/lib/apt/lists/*
 
-# Make python3.12 the default
-RUN update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.12 1
+# Make python3.12 the default + bootstrap pip
+RUN update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.12 1 && \
+    curl -sS https://bootstrap.pypa.io/get-pip.py | python3.12
 
 WORKDIR /app
 

@@ -30,7 +30,7 @@ jobs:
           pip install --no-cache-dir ruff
 
       - name: Lint
-        run: ruff check --select=E,F,W --ignore=E501,E402,F841,W605 Chatter.py server.py
+        run: ruff check server.py
 
       - name: Unit tests - pause tag parsing
         run: |

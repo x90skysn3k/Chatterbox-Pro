@@ -12,7 +12,6 @@ Models supported:
 """
 import os
 import sys
-import io
 import re
 import glob
 import logging
@@ -273,7 +272,7 @@ def _cleanup_old_jobs():
             if job.get("output_path") and os.path.exists(job["output_path"]):
                 try:
                     os.remove(job["output_path"])
-                except:
+                except OSError:
                     pass
             logger.info(f"Cleaned up expired job {jid}")
 
@@ -438,7 +437,7 @@ async def result(job_id: str):
     # Cleanup
     try:
         os.remove(output_path)
-    except:
+    except OSError:
         pass
     with _jobs_lock:
         del _jobs[job_id]
