@@ -27,7 +27,7 @@ RUN pip install --no-cache-dir --upgrade pip && \
     pip install --no-cache-dir --no-deps auto-editor==27.1.1
 
 # Copy application code
-COPY Chatter.py server.py test-models.py test-corpus.json ./
+COPY Chatter.py server.py stream.html VERSION test-models.py test-corpus.json ./
 COPY chatterbox/ ./chatterbox/
 COPY install-patches.sh .
 
