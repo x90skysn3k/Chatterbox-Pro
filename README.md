@@ -127,7 +127,13 @@ Returns `{ "job_id": "abc12345", "status": "processing" }` instantly.
   "chunk_size": 250,
   "seed": 0,
   "model": "standard",
-  "apply_watermark": false
+  "apply_watermark": false,
+  "top_p": 0.8,
+  "repetition_penalty": 2.0,
+  "num_candidates": 2,
+  "max_attempts": 3,
+  "skip_normalization": false,
+  "use_silero_vad": false
 }
 ```
 
@@ -152,11 +158,21 @@ Returns real-time generation progress:
 
 Returns binary WAV audio. Deletes job after download.
 
+#### `GET /result/{job_id}` — Response Headers
+
+When server-side normalization is applied, the response includes headers so clients can skip their own pass:
+
+```
+X-Audio-Normalized: ebu
+X-Audio-Loudnorm: I=-16:TP=-1.5:LRA=11
+```
+
 #### `GET /health` — Server health check
 
 ```json
 {
   "status": "healthy",
+  "version": "1.2.0",
   "uptime": "2h 15m 30s",
   "uptime_seconds": 8130,
   "model": {
@@ -164,15 +180,22 @@ Returns binary WAV audio. Deletes job after download.
     "type": "standard"
   },
   "vram": {
-    "allocated_mb": 4521.3,
-    "reserved_mb": 5120.0,
-    "max_allocated_mb": 6200.1,
-    "total_mb": 16384.0,
+    "allocated_mb": 3058.8,
+    "reserved_mb": 3088.0,
+    "max_allocated_mb": 3058.8,
+    "total_mb": 24438.8,
     "device": "Tesla P40",
-    "used_pct": 27.6
+    "used_pct": 12.5
   },
-  "jobs": { "active": 1, "done": 5, "failed": 0 },
-  "generation_count": 42
+  "gpu": {
+    "compute_capability": "6.1",
+    "supports_bf16": false,
+    "supports_fp16": false,
+    "supports_tf32": false
+  },
+  "jobs": { "active": 0, "done": 5, "failed": 0 },
+  "generation_count": 42,
+  "disk": { "temp_mb": 0.3, "output_mb": 56.7 }
 }
 ```
 
@@ -184,32 +207,33 @@ Returns binary WAV audio. Deletes job after download.
 Text Input
   |
   v
-Text Preprocessing (lowercase, spacing, dot-letters, sound words)
+Text Preprocessing (spacing, dot-letters, sound words, pause tags)
   |
   v
-Sentence Tokenization (NLTK) + Smart Batching
+Sentence Tokenization (NLTK) + Smart Batching (min 80 chars, max 300)
   |
   v
 Per-Chunk Generation (2 candidates, deterministic seeds, parallel workers)
-  |
+  |  - top_p + repetition_penalty forwarded to T3 sampling
+  |  - Trailing noise trimmed from each candidate
   v
 Whisper Validation (faster-whisper medium, fuzzy match > 0.85)
-  |  retry up to 3x per candidate if failed
+  |  retry up to 3x per candidate if failed (same 0.85 threshold)
   v
-Best Candidate Selection (shortest passing, or longest transcript fallback)
+Multi-Factor Candidate Scoring (whisper accuracy + speaking rate + duration)
   |
   v
-Audio Concatenation
-  |
-  v
-pyrnnoise Denoising (neural noise reduction, 48kHz)
-  |
+Equal-Power Crossfade Concatenation (50ms sqrt overlap-add)
+  |  + pause tag splicing
   v
 Auto-Editor (silence trim, threshold=0.02, margin=0.4s)
+  |  OR Silero VAD (intelligent speech-aware trimming, opt-in)
+  v
+pyrnnoise Denoising (neural noise reduction, mono 48kHz)
   |
   v
-FFmpeg Loudnorm (EBU R128: -16 LUFS, -1.5 TP, 11 LRA)
-  |
+Two-Pass EBU R128 Loudnorm (-16 LUFS, -1.5 TP, 11 LRA)
+  |  measure → apply with linear=true (preserves dynamics)
   v
 Output WAV (192kHz)
 ```
@@ -309,11 +333,15 @@ The deploy script is gitignored. Workflow:
 | temperature | 0.75 | Natural variance |
 | exaggeration | 0.65 | Authoritative calm |
 | cfg_weight | 0.4 | Balanced delivery |
+| top_p | 0.8 | Nucleus sampling threshold (T3 default) |
+| repetition_penalty | 2.0 | Prevents repeated tokens (T3 default) |
 | speed_factor | 1.0 | Must be 1.0 (other values cause double voice) |
 | voice | default.wav | Custom reference |
 | whisper_model | medium | Best accuracy/speed tradeoff |
-| candidates | 2 | Per chunk |
+| num_candidates | 2 | Per chunk, scored by quality |
 | max_attempts | 3 | Retries per candidate |
+| skip_normalization | false | Set true if client normalizes |
+| use_silero_vad | false | Intelligent silence trim (alt to auto-editor) |
 
 ---
 
@@ -349,7 +377,7 @@ Differences: `use_faster_whisper=False` (needs CUDA), `num_parallel_workers=1` (
 ## Known Issues
 
 ### Memory leak on P40
-VRAM usage grows over time. Restart after every 2-3 videos:
+VRAM usage grows over time. Server now runs VRAM cleanup between jobs automatically, but restart after every 2-3 videos if needed:
 ```bash
 ssh root@ai.tiden.local "systemctl restart chatterbox-extended"
 ```
@@ -357,6 +385,36 @@ The `/health` endpoint reports `vram.used_pct` — restart when approaching 80%.
 
 ### faster-whisper crashes
 Occasionally silently crashes on certain audio. Falls back to longest-transcript selection. Switch to OpenAI Whisper if persistent: set `use_faster_whisper=False`.
+
+---
+
+## Changelog
+
+### v1.2.0
+- Guard two-pass loudnorm against `-inf` crash on quiet audio
+- Fix excessive WAV generation per chunk (1 attempt per candidate, retry on Whisper fail)
+- Add trailing noise trimming before Whisper validation
+- `generate_batch()` now has `top_p`/`repetition_penalty` parity with `generate()`
+- Server prints version on startup, in `/health`, and UI
+- Clean log path (`logs/server.log` only)
+
+### v1.1.0
+- Raise min chunk length 20→80 chars (prevents TTS hallucinations)
+- Equal-power crossfade between chunks (eliminates clicks/pops, no 3dB dip)
+- MD5-based conditional caching for voice embeddings
+- Forward `top_p` and `repetition_penalty` through `tts.py` → T3 sampling
+- Multi-factor scored candidate selection (replaces shortest-duration)
+- Silero VAD integration for intelligent silence trimming (opt-in)
+- VRAM leak management with proactive cleanup between jobs
+- `skip_normalization` param + `X-Audio-Normalized` response headers
+- `/health` endpoint with VRAM, GPU, jobs, disk stats
+- Rotating file log handler (`logs/server.log`)
+- Fix RNNoise stereo bug (`-ac 2` → `-ac 1`)
+- Fix Whisper retry threshold (0.95 → 0.85, matched to initial)
+- Two-pass EBU R128 loudnorm (preserves dynamics vs single-pass)
+- Reorder post-processing: auto-editor → denoise → loudnorm
+- Thread safety fix for `_jobs` dict access
+- Temp file cleanup (remove files >24h old)
 
 ---
 
