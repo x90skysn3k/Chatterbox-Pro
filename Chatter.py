@@ -880,7 +880,7 @@ def _apply_silero_vad_trim(wav_path, min_silence_ms=300, max_silence_ms=400, spe
         return False
 
 
-def _vad_trim_chunk(wav_path, speech_pad_ms=100):
+def _vad_trim_chunk(wav_path, speech_pad_ms=60):
     """
     Per-chunk VAD trim: removes only leading/trailing silence from a single chunk WAV.
     Preserves ALL internal pauses. Uses Silero VAD for speech-aware boundary detection.
@@ -1792,7 +1792,7 @@ def process_text_for_tts(
             print(f"\033[33m[WARNING] No audio generated in generation {gen_index+1}\033[0m")
             continue
 
-        full_audio = crossfade_waveforms(waveform_list, model.sr, crossfade_ms=50)
+        full_audio = crossfade_waveforms(waveform_list, model.sr, crossfade_ms=75)
         # Free individual chunk waveforms now that they're concatenated
         del waveform_list
 
