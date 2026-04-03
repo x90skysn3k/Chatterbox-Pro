@@ -20,7 +20,7 @@ import torchaudio
 import gc
 
 VOICES_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "voices")
-DEFAULT_VOICE = os.path.join(VOICES_DIR, os.environ.get("DEFAULT_VOICE", "executed-edge.wav"))
+DEFAULT_VOICE = os.path.join(VOICES_DIR, os.environ.get("DEFAULT_VOICE", "default.wav"))
 
 # Test sentences
 TESTS = [

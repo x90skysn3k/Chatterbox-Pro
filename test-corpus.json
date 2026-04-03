@@ -1,7 +1,7 @@
 {
   "description": "Standardized test sentences for A/B model and pipeline comparison",
   "version": "1.0",
-  "voice_reference": "executed-edge.wav",
+  "voice_reference": "default.wav",
   "tests": [
     {
       "id": "simple-narration",

@@ -89,7 +89,7 @@ Returns `{ "job_id": "abc12345", "status": "processing" }` instantly.
 {
   "text": "Your narration text here.",
   "voice_mode": "predefined",
-  "predefined_voice_id": "executed-edge.wav",
+  "predefined_voice_id": "default.wav",
   "temperature": 0.75,
   "exaggeration": 0.65,
   "cfg_weight": 0.4,
@@ -201,7 +201,7 @@ Compare TTS models and pipeline configurations with standardized test sentences.
 ./run.sh tts-compare current,turbo,hf-800m
 
 # Full comparison (all 7 tests)
-npm run qa:tts-compare -- --models current,turbo --voice executed-edge.wav
+npm run qa:tts-compare -- --models current,turbo --voice default.wav
 
 # Use local M1 Max
 npm run qa:tts-compare -- --models current --local --quick
@@ -281,7 +281,7 @@ The deploy script is gitignored. Workflow:
 | exaggeration | 0.65 | Authoritative calm |
 | cfg_weight | 0.4 | Balanced delivery |
 | speed_factor | 1.0 | Must be 1.0 (other values cause double voice) |
-| voice | executed-edge.wav | Custom reference |
+| voice | default.wav | Custom reference |
 | whisper_model | medium | Best accuracy/speed tradeoff |
 | candidates | 2 | Per chunk |
 | max_attempts | 3 | Retries per candidate |
@@ -353,7 +353,7 @@ Chatter.py             Main TTS pipeline (batching, validation, post-processing)
 test-corpus.json       QA comparison test sentences
 deploy-p40.sh          P40 deployment script (gitignored)
 voices/                Reference audio files
-  executed-edge.wav    Production voice
+  default.wav    Production voice
 chatterbox/src/        Core model implementations
   chatterbox/tts.py    ChatterboxTTS class (500M)
   chatterbox/vc.py     ChatterboxVC (voice conversion)
