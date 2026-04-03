@@ -300,8 +300,12 @@ MODEL = None
 def _free_vram(label=""):
     """
     Best-effort VRAM/RAM cleanup before (re)initializing heavy models.
-    Safe to call on CPU-only systems.
+    Safe to call on CPU-only systems. Also clears the conditional cache.
     """
+    global MODEL
+    if MODEL is not None and hasattr(MODEL, '_cond_cache'):
+        MODEL._cond_cache.clear()
+        print("[VRAM] Cleared conditional cache")
     try:
         gc.collect()
     except Exception:
@@ -347,6 +351,40 @@ def load_whisper_backend(model_name, use_faster_whisper, device):
         return whisper.load_model(model_name, device=device)
 
 
+def _md5_file(fpath):
+    """Compute MD5 hash of a file for cache key validation."""
+    import hashlib
+    h = hashlib.md5()
+    with open(fpath, 'rb') as f:
+        for chunk in iter(lambda: f.read(8192), b''):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def _install_cond_cache(model):
+    """Wrap model._build_conditionals with MD5-based caching to skip redundant voice embedding computation."""
+    if not hasattr(model, '_build_conditionals'):
+        print("[CACHE] Model has no _build_conditionals — skipping cache install")
+        return
+    original_build = model._build_conditionals
+    cache = {}
+
+    def _cached_build(wav_fpath, exaggeration=0.5):
+        md5 = _md5_file(wav_fpath)
+        key = (md5, round(exaggeration, 2))
+        if key in cache:
+            print(f"[CACHE] Conditional cache HIT for {os.path.basename(wav_fpath)} (exag={exaggeration:.2f})")
+            return model._clone_conditionals(cache[key], exaggeration=exaggeration)
+        print(f"[CACHE] Conditional cache MISS for {os.path.basename(wav_fpath)} — computing embeddings")
+        result = original_build(wav_fpath, exaggeration=exaggeration)
+        cache[key] = result
+        return model._clone_conditionals(result, exaggeration=exaggeration)
+
+    model._build_conditionals = _cached_build
+    model._cond_cache = cache  # expose for VRAM cleanup
+    print("[CACHE] Conditional caching installed")
+
+
 def get_or_load_model():
     global MODEL
     if MODEL is None:
@@ -356,6 +394,7 @@ def get_or_load_model():
             MODEL.to(DEVICE)
         if hasattr(MODEL, "eval"):
             MODEL.eval()
+        _install_cond_cache(MODEL)
         print(f"Model loaded on device: {getattr(MODEL, 'device', 'unknown')}")
     return MODEL
 
@@ -565,22 +604,24 @@ def group_sentences(sentences, max_chars=300):
 
     return chunks
 
-def smart_append_short_sentences(sentences, max_chars=300):
+def smart_append_short_sentences(sentences, max_chars=300, min_chunk_len=80):
     new_groups = []
     i = 0
     while i < len(sentences):
         current = sentences[i].strip()
-        if len(current) >= 20:
+        if len(current) >= min_chunk_len:
             new_groups.append(current)
             i += 1
         else:
             appended = False
+            # Try merging forward with next sentence
             if i + 1 < len(sentences):
                 next_sentence = sentences[i + 1].strip()
                 if len(current + " " + next_sentence) <= max_chars:
                     new_groups.append(current + " " + next_sentence)
                     i += 2
                     appended = True
+            # Try merging backward with previous group
             if not appended and new_groups:
                 if len(new_groups[-1] + " " + current) <= max_chars:
                     new_groups[-1] += " " + current
@@ -698,6 +739,128 @@ def _apply_pyrnnoise_in_place(wav_output_path):
                 pass
 
 
+_SILERO_VAD_MODEL = None
+
+def _load_silero_vad():
+    """Load Silero VAD model (ONNX, runs on CPU — no GPU contention)."""
+    global _SILERO_VAD_MODEL
+    if _SILERO_VAD_MODEL is None:
+        print("[VAD] Loading Silero VAD model (ONNX/CPU)...")
+        model, utils = torch.hub.load(
+            repo_or_dir='snakers4/silero-vad',
+            model='silero_vad',
+            force_reload=False,
+            onnx=True,
+        )
+        _SILERO_VAD_MODEL = (model, utils)
+        print("[VAD] Silero VAD loaded")
+    return _SILERO_VAD_MODEL
+
+
+def _apply_silero_vad_trim(wav_path, min_silence_ms=300, max_silence_ms=500, speech_pad_ms=100):
+    """
+    Use Silero VAD for intelligent silence trimming. Preserves natural pauses
+    (up to max_silence_ms) while removing dead air. Far superior to auto-editor's
+    simple amplitude threshold.
+    Returns True if trimming was applied, False otherwise.
+    """
+    try:
+        model, utils = _load_silero_vad()
+        get_speech_timestamps = utils[0]
+        read_audio = utils[2]
+
+        # Silero VAD requires 16kHz input
+        wav_16k = read_audio(wav_path, sampling_rate=16000)
+        speech_timestamps = get_speech_timestamps(
+            wav_16k, model,
+            threshold=0.5,
+            min_silence_duration_ms=min_silence_ms,
+            speech_pad_ms=speech_pad_ms,
+            return_seconds=False,
+            sampling_rate=16000,
+        )
+
+        if not speech_timestamps:
+            print(f"[VAD] No speech detected in {wav_path} — skipping trim")
+            return False
+
+        # Load original audio at native sample rate
+        waveform, sr = torchaudio.load(wav_path)
+        scale = sr / 16000
+
+        # Build output: speech segments with silence capped at max_silence_ms
+        max_silence_samples = int(max_silence_ms * sr / 1000)
+        segments = []
+        for i, ts in enumerate(speech_timestamps):
+            start = int(ts['start'] * scale)
+            end = int(ts['end'] * scale)
+
+            if i > 0:
+                prev_end = int(speech_timestamps[i - 1]['end'] * scale)
+                gap = start - prev_end
+                if gap > max_silence_samples:
+                    # Cap extended silence
+                    segments.append(torch.zeros(1, max_silence_samples))
+                else:
+                    # Keep natural silence
+                    segments.append(waveform[:, prev_end:start])
+
+            segments.append(waveform[:, start:end])
+
+        result = torch.cat(segments, dim=1)
+        torchaudio.save(wav_path, result, sr)
+
+        original_dur = waveform.shape[1] / sr
+        trimmed_dur = result.shape[1] / sr
+        print(f"[VAD] Trimmed {wav_path}: {original_dur:.2f}s → {trimmed_dur:.2f}s (removed {original_dur - trimmed_dur:.2f}s silence)")
+        return True
+
+    except Exception as e:
+        print(f"[VAD] Silero VAD trim failed: {e}")
+        return False
+
+
+def crossfade_waveforms(waveform_list, sr, crossfade_ms=50):
+    """
+    Concatenate waveform tensors with overlap-add crossfade to eliminate clicks/pops
+    at chunk boundaries. Each waveform is shape (1, N).
+    """
+    if not waveform_list:
+        return torch.zeros(1, 0)
+    if len(waveform_list) == 1:
+        return waveform_list[0]
+
+    crossfade_samples = int(sr * crossfade_ms / 1000)
+    if crossfade_samples < 1:
+        return torch.cat(waveform_list, dim=1)
+
+    result = waveform_list[0]
+    for i in range(1, len(waveform_list)):
+        next_wav = waveform_list[i]
+        # Skip crossfade if either chunk is too short
+        if result.shape[1] < 2 * crossfade_samples or next_wav.shape[1] < 2 * crossfade_samples:
+            result = torch.cat([result, next_wav], dim=1)
+            continue
+
+        # Fade-out ramp for tail of current, fade-in ramp for head of next
+        fade_out = torch.linspace(1.0, 0.0, crossfade_samples, device=result.device).unsqueeze(0)
+        fade_in = torch.linspace(0.0, 1.0, crossfade_samples, device=next_wav.device).unsqueeze(0)
+
+        # Extract overlap regions
+        tail = result[:, -crossfade_samples:] * fade_out
+        head = next_wav[:, :crossfade_samples] * fade_in
+        blended = tail + head
+
+        # Assemble: everything before overlap + blended region + everything after overlap
+        result = torch.cat([
+            result[:, :-crossfade_samples],
+            blended,
+            next_wav[:, crossfade_samples:]
+        ], dim=1)
+
+    return result
+
+
 def get_wav_duration(path):
     try:
         return librosa.get_duration(filename=path)
@@ -710,6 +873,34 @@ def normalize_for_compare_all_punct(text):
     text = re.sub(rf"[{re.escape(string.punctuation)}]", '', text)
     text = re.sub(r'\s+', ' ', text)
     return text.lower().strip()
+
+def score_candidate(duration, whisper_score, text_len):
+    """
+    Score a TTS candidate on multiple quality factors. Higher = better.
+    - Whisper accuracy (40%): how well the audio matches intended text
+    - Speaking rate naturalness (40%): penalizes rushed or overly slow speech
+    - Duration preference (20%): slightly prefers longer (not rushed) over shorter
+    Expected English TTS rate: ~14 chars/sec.
+    """
+    expected_duration = text_len / 14.0 if text_len > 0 else 1.0
+
+    # Rate deviation: 1.0 = perfect, decays for fast/slow speech
+    if expected_duration > 0:
+        rate_ratio = duration / expected_duration
+        if rate_ratio < 1.0:
+            # Penalize rushed speech more aggressively
+            rate_score = rate_ratio
+        else:
+            # Gentler penalty for slow speech
+            rate_score = max(0.0, 1.0 - (rate_ratio - 1.0) * 0.5)
+    else:
+        rate_score = 0.5
+
+    # Duration preference: normalized 0-1, favors being close to expected
+    dur_score = min(1.0, duration / max(expected_duration, 0.1))
+
+    return 0.4 * whisper_score + 0.4 * rate_score + 0.2 * dur_score
+
 
 def fuzzy_match(text1, text2, threshold=0.85):
     t1 = normalize_for_compare_all_punct(text1)
@@ -813,7 +1004,8 @@ def process_one_chunk(
     audio_prompt_path_input, exaggeration_input, temperature_input, cfgw_input,
     disable_watermark, num_candidates_per_chunk, max_attempts_per_candidate,
     bypass_whisper_checking,
-    retry_attempt_number=1
+    retry_attempt_number=1,
+    top_p=0.8, repetition_penalty=2.0,
 ):
     candidates = []
     try:
@@ -831,13 +1023,14 @@ def process_one_chunk(
                 set_seed(candidate_seed)
                 try:
                     print(f"\033[32m[DEBUG] Generating candidate {cand_idx+1} attempt {attempt+1} for chunk {idx}...\033[0m")
-#                    print(f"[TTS DEBUG] audio_prompt_path passed: {audio_prompt_path_input!r}")
                     wav = model.generate(
                         sentence_group,
                         audio_prompt_path=audio_prompt_path_input,
                         exaggeration=min(exaggeration_input, 1.0),
                         temperature=temperature_input,
                         cfg_weight=cfgw_input,
+                        top_p=top_p,
+                        repetition_penalty=repetition_penalty,
                         apply_watermark=not disable_watermark
                     )
                     
@@ -870,7 +1063,8 @@ def process_one_chunk_deterministic(
     audio_prompt_path_input, exaggeration_input, temperature_input, cfgw_input,
     disable_watermark, num_candidates_per_chunk, max_attempts_per_candidate,
     bypass_whisper_checking,
-    retry_attempt_number=1
+    retry_attempt_number=1,
+    top_p=0.8, repetition_penalty=2.0,
 ):
     """
     Deterministic per-chunk generation that does NOT mutate global RNG.
@@ -920,6 +1114,8 @@ def process_one_chunk_deterministic(
                             exaggeration=min(exaggeration_input, 1.0),
                             temperature=temperature_input,
                             cfg_weight=cfgw_input,
+                            top_p=top_p,
+                            repetition_penalty=repetition_penalty,
                             apply_watermark=not disable_watermark,
                             generator=gen,  # isolated RNG
                         )
@@ -935,6 +1131,8 @@ def process_one_chunk_deterministic(
                                 exaggeration=min(exaggeration_input, 1.0),
                                 temperature=temperature_input,
                                 cfg_weight=cfgw_input,
+                                top_p=top_p,
+                                repetition_penalty=repetition_penalty,
                                 apply_watermark=not disable_watermark,
                             )
 
@@ -1159,9 +1357,12 @@ def process_text_for_tts(
     use_longest_transcript_on_fail,
     sound_words_field,
     use_faster_whisper=False,
+    top_p=0.8,
+    repetition_penalty=2.0,
+    use_silero_vad=False,
 ):
 
-    
+
 
     model = get_or_load_model()
     whisper_model = None
@@ -1199,7 +1400,7 @@ def process_text_for_tts(
     sentences = split_into_sentences(text)
     print(f"\033[32m[DEBUG] Split text into {len(sentences)} sentences.\033[0m")
 
-    def enforce_min_chunk_length(chunks, min_len=20, max_len=300):
+    def enforce_min_chunk_length(chunks, min_len=80, max_len=300):
         out = []
         i = 0
         while i < len(chunks):
@@ -1208,16 +1409,22 @@ def process_text_for_tts(
                 out.append(current)
                 i += 1
             else:
-                # Try to merge with the next chunk if possible
+                merged = False
+                # Try to merge with the next chunk
                 if i + 1 < len(chunks):
-                    merged = current + " " + chunks[i + 1]
-                    if len(merged) <= max_len:
-                        out.append(merged)
+                    forward = current + " " + chunks[i + 1]
+                    if len(forward) <= max_len:
+                        out.append(forward)
                         i += 2
-                    else:
-                        out.append(current)
+                        merged = True
+                # Try to merge with the previous chunk (backward merge)
+                if not merged and out:
+                    backward = out[-1] + " " + current
+                    if len(backward) <= max_len:
+                        out[-1] = backward
                         i += 1
-                else:
+                        merged = True
+                if not merged:
                     out.append(current)
                     i += 1
         return out
@@ -1256,7 +1463,8 @@ def process_text_for_tts(
                         process_one_chunk_deterministic,
                         model, group, idx, gen_index, this_seed,
                         audio_prompt_path_input, exaggeration_input, temperature_input, cfgw_input,
-                        disable_watermark, num_candidates_per_chunk, max_attempts_per_candidate, bypass_whisper_checking
+                        disable_watermark, num_candidates_per_chunk, max_attempts_per_candidate, bypass_whisper_checking,
+                        1, top_p, repetition_penalty,
                     )
                     for idx, group in enumerate(sentence_groups)
                 ]
@@ -1272,7 +1480,8 @@ def process_text_for_tts(
                 idx, candidates = process_one_chunk_deterministic(
                     model, group, idx, gen_index, this_seed,
                     audio_prompt_path_input, exaggeration_input, temperature_input, cfgw_input,
-                    disable_watermark, num_candidates_per_chunk, max_attempts_per_candidate, bypass_whisper_checking
+                    disable_watermark, num_candidates_per_chunk, max_attempts_per_candidate, bypass_whisper_checking,
+                    1, top_p, repetition_penalty,
                 )
                 chunk_candidate_map[idx] = candidates
 
@@ -1307,7 +1516,7 @@ def process_text_for_tts(
                         path, score, transcribed = whisper_check_mp(candidate_path, sentence_group, whisper_model, use_faster_whisper)
                         print(f"\033[32m[DEBUG] [Chunk {chunk_idx}] {os.path.basename(candidate_path)}: score={score:.3f}, transcript=\033[33m'{transcribed}'\033[0m")
                         if score >= 0.85:
-                            chunk_validations[chunk_idx].append((cand['duration'], cand['path']))
+                            chunk_validations[chunk_idx].append((cand['duration'], cand['path'], score, len(sentence_group)))
                         else:
                             chunk_failed_candidates[chunk_idx].append((score, cand['path'], transcribed))
                     except Exception as e:
@@ -1341,7 +1550,8 @@ def process_text_for_tts(
                                 audio_prompt_path_input, exaggeration_input, temperature_input, cfgw_input,
                                 disable_watermark, num_candidates_per_chunk, 1,
                                 bypass_whisper_checking,
-                                chunk_attempts[chunk_idx] + 1
+                                chunk_attempts[chunk_idx] + 1,
+                                top_p, repetition_penalty,
                             )
                             for chunk_idx in still_need_retry
                         ]
@@ -1361,7 +1571,7 @@ def process_text_for_tts(
                                 path, score, transcribed = whisper_check_mp(candidate_path, sentence_group, whisper_model, use_faster_whisper)
                                 print(f"\033[32m[DEBUG] [Chunk {chunk_idx}] RETRY {os.path.basename(candidate_path)}: score={score:.3f}, transcript=\033[33m'{transcribed}'\033[0m")
                                 if score >= 0.95:
-                                    chunk_validations[chunk_idx].append((cand['duration'], cand['path']))
+                                    chunk_validations[chunk_idx].append((cand['duration'], cand['path'], score, len(sentence_group)))
                                 else:
                                     chunk_failed_candidates[chunk_idx].append((score, cand['path'], transcribed))
                             except Exception as e:
@@ -1375,8 +1585,12 @@ def process_text_for_tts(
                 # Assemble waveform list
                 for chunk_idx in sorted(chunk_candidate_map.keys()):
                     if chunk_validations[chunk_idx]:
-                        best_path = sorted(chunk_validations[chunk_idx], key=lambda x: x[0])[0][1]
-                        print(f"\033[32m[DEBUG] Selected {best_path} as best candidate for chunk {chunk_idx} \033[1;33m(PASSED Whisper check)\033[0m")
+                        # Scored selection: multi-factor quality scoring (duration, whisper score, pacing)
+                        best = max(chunk_validations[chunk_idx],
+                                   key=lambda x: score_candidate(x[0], x[2], x[3]))
+                        best_path = best[1]
+                        best_score = score_candidate(best[0], best[2], best[3])
+                        print(f"\033[32m[DEBUG] Selected {best_path} as best candidate for chunk {chunk_idx} (composite_score={best_score:.3f}, whisper={best[2]:.3f}, dur={best[0]:.2f}s) \033[1;33m(PASSED Whisper check)\033[0m")
                         waveform, sr = torchaudio.load(best_path)
                         waveform_list.append(waveform)
                     elif chunk_failed_candidates[chunk_idx]:
@@ -1427,7 +1641,7 @@ def process_text_for_tts(
             print(f"\033[33m[WARNING] No audio generated in generation {gen_index+1}\033[0m")
             continue
 
-        full_audio = torch.cat(waveform_list, dim=1)
+        full_audio = crossfade_waveforms(waveform_list, model.sr, crossfade_ms=50)
         # Free individual chunk waveforms now that they're concatenated
         del waveform_list
 
@@ -1437,7 +1651,6 @@ def process_text_for_tts(
             print(f"\033[32m[DEBUG] Spliced {len(pause_markers)} pause(s) into audio\033[0m")
 
         _free_vram("after concatenation")
-
         timestamp = datetime.datetime.now().strftime("%Y-%m-%d_%H%M%S_%f")[:-3]
         filename_suffix = f"{timestamp}_gen{gen_index+1}_seed{this_seed}"
         wav_output = f"output/{input_basename}audio_{filename_suffix}.wav"
@@ -1484,6 +1697,13 @@ def process_text_for_tts(
                     print(f"\033[32m[DEBUG] Post-processed with auto-editor: {wav_output}\033[0m")
             except Exception as e:
                 print(f"[ERROR] Auto-editor post-processing failed: {e}")
+
+        # --- SILERO VAD (optional, alternative to auto-editor) ---
+        if use_silero_vad:
+            try:
+                _apply_silero_vad_trim(wav_output)
+            except Exception as e:
+                print(f"[ERROR] Silero VAD trim failed: {e}")
 
         if normalize_audio:
             try:

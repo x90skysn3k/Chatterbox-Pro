@@ -13,6 +13,7 @@ Models supported:
 import os
 import sys
 import re
+import gc
 import glob
 import logging
 import threading
@@ -30,13 +31,16 @@ from fastapi import FastAPI
 from fastapi.responses import Response, HTMLResponse, JSONResponse
 from pydantic import BaseModel
 
-LOG_FILE = "/tmp/extended-server.log"
+from logging.handlers import RotatingFileHandler
+
+LOG_FILE = "logs/server.log"
+os.makedirs("logs", exist_ok=True)
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s",
     handlers=[
         logging.StreamHandler(),
-        logging.FileHandler(LOG_FILE, mode="a"),
+        RotatingFileHandler(LOG_FILE, maxBytes=10*1024*1024, backupCount=3),
     ],
 )
 logger = logging.getLogger("extended-server")
@@ -51,6 +55,21 @@ os.makedirs("output", exist_ok=True)
 
 # Lock to prevent concurrent process_text_for_tts calls (it purges temp/ dir)
 _generation_lock = threading.Lock()
+
+
+def _force_vram_cleanup():
+    """Aggressive VRAM cleanup between jobs to combat memory leaks."""
+    gc.collect()
+    try:
+        import torch
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+            torch.cuda.synchronize()
+            allocated = torch.cuda.memory_allocated() / 1024**2
+            reserved = torch.cuda.memory_reserved() / 1024**2
+            logger.info(f"[VRAM] Post-cleanup: {allocated:.0f}MB allocated, {reserved:.0f}MB reserved")
+    except ImportError:
+        pass
 
 # Job store
 _jobs = {}
@@ -156,6 +175,12 @@ class TTSRequest(BaseModel):
     seed: int = 0
     model: str = "standard"  # standard | turbo | multilingual | hf-800m
     apply_watermark: bool = False
+    top_p: float = 0.8
+    repetition_penalty: float = 2.0
+    skip_normalization: bool = False
+    use_silero_vad: bool = False
+    num_candidates: int = 2
+    max_attempts: int = 3
 
 
 def _find_output_wav(result):
@@ -201,9 +226,9 @@ def _run_generation(job_id, request, voice_path):
                 seed_num_input=request.seed,
                 cfgw_input=request.cfg_weight,
                 use_pyrnnoise=True,
-                use_auto_editor=True,
-                ae_threshold=0.02,  # Gentler than 0.06 — only cuts true silence, not quiet speech
-                ae_margin=0.4,      # 0.4s margin (was 0.2) — protects word boundaries
+                use_auto_editor=not request.use_silero_vad,
+                ae_threshold=0.02,
+                ae_margin=0.4,
                 export_formats=["wav"],
                 enable_batching=False,
                 to_lowercase=False,
@@ -214,13 +239,13 @@ def _run_generation(job_id, request, voice_path):
                 smart_batch_short_sentences=True,
                 disable_watermark=not request.apply_watermark,
                 num_generations=1,
-                normalize_audio=True,
+                normalize_audio=not request.skip_normalization,
                 normalize_method="ebu",
                 normalize_level=-16,
                 normalize_tp=-1.5,
                 normalize_lra=11,
-                num_candidates_per_chunk=2,
-                max_attempts_per_candidate=3,
+                num_candidates_per_chunk=request.num_candidates,
+                max_attempts_per_candidate=request.max_attempts,
                 bypass_whisper_checking=False,
                 whisper_model_name="medium",
                 enable_parallel=True,
@@ -228,6 +253,9 @@ def _run_generation(job_id, request, voice_path):
                 use_longest_transcript_on_fail=True,
                 sound_words_field="",
                 use_faster_whisper=True,
+                top_p=request.top_p,
+                repetition_penalty=request.repetition_penalty,
+                use_silero_vad=request.use_silero_vad,
             )
 
         output_path = _find_output_wav(result)
@@ -260,10 +288,11 @@ def _run_generation(job_id, request, voice_path):
     finally:
         sys.stdout = old_stdout
         sys.stderr = old_stderr
+        _force_vram_cleanup()
 
 
 def _cleanup_old_jobs():
-    """Remove jobs older than 2 hours."""
+    """Remove jobs older than 2 hours and cleanup VRAM if idle."""
     cutoff = time.time() - 7200
     with _jobs_lock:
         expired = [jid for jid, j in _jobs.items() if j["started"] < cutoff]
@@ -275,6 +304,9 @@ def _cleanup_old_jobs():
                 except OSError:
                     pass
             logger.info(f"Cleaned up expired job {jid}")
+        active = sum(1 for j in _jobs.values() if j["status"] == "processing")
+    if active == 0 and expired:
+        _force_vram_cleanup()
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -313,6 +345,8 @@ async def health():
             "device": torch.cuda.get_device_name(0),
         }
         vram["used_pct"] = round(vram["allocated_mb"] / vram["total_mb"] * 100, 1) if vram["total_mb"] > 0 else 0
+        if vram["used_pct"] > 90:
+            vram["warning"] = "VRAM usage above 90% — consider restarting"
         gpu = {
             "compute_capability": f"{cap[0]}.{cap[1]}",
             "supports_bf16": cap >= (8, 0),
@@ -325,6 +359,15 @@ async def health():
         active = sum(1 for j in _jobs.values() if j["status"] == "processing")
         done = sum(1 for j in _jobs.values() if j["status"] == "done")
         failed = sum(1 for j in _jobs.values() if j["status"] == "failed")
+
+    # Disk usage
+    disk = {}
+    try:
+        temp_size = sum(os.path.getsize(os.path.join("temp", f)) for f in os.listdir("temp") if os.path.isfile(os.path.join("temp", f)))
+        output_size = sum(os.path.getsize(os.path.join("output", f)) for f in os.listdir("output") if os.path.isfile(os.path.join("output", f)))
+        disk = {"temp_mb": round(temp_size / 1024**2, 1), "output_mb": round(output_size / 1024**2, 1)}
+    except Exception:
+        pass
 
     return JSONResponse({
         "status": "healthy",
@@ -342,6 +385,7 @@ async def health():
             "failed": failed,
         },
         "generation_count": _generation_count,
+        "disk": disk,
     })
 
 
@@ -357,7 +401,10 @@ async def tts(request: TTSRequest):
     job_id = str(uuid.uuid4())[:8]
 
     logger.info(f"[{job_id}] Queued: {len(request.text)} chars, model={request.model}, "
-                f"exag={request.exaggeration}, cfg={request.cfg_weight}, temp={request.temperature}")
+                f"exag={request.exaggeration}, cfg={request.cfg_weight}, temp={request.temperature}, "
+                f"top_p={request.top_p}, rep_penalty={request.repetition_penalty}, "
+                f"candidates={request.num_candidates}, attempts={request.max_attempts}, "
+                f"vad={request.use_silero_vad}, skip_norm={request.skip_normalization}")
 
     with _jobs_lock:
         _jobs[job_id] = {
@@ -375,6 +422,7 @@ async def tts(request: TTSRequest):
             "current_candidate": 0,
             "current_attempt": 0,
             "last_duration": 0,
+            "skip_normalization": request.skip_normalization,
         }
 
     thread = threading.Thread(target=_run_generation, args=(job_id, request, voice_path), daemon=True)
@@ -442,7 +490,12 @@ async def result(job_id: str):
     with _jobs_lock:
         del _jobs[job_id]
 
-    return Response(content=audio_bytes, media_type="audio/wav")
+    headers = {}
+    # Signal to client whether server-side normalization was applied
+    if not job.get("skip_normalization", False):
+        headers["X-Audio-Normalized"] = "ebu"
+        headers["X-Audio-Loudnorm"] = "I=-16:TP=-1.5:LRA=11"
+    return Response(content=audio_bytes, media_type="audio/wav", headers=headers)
 
 
 if __name__ == "__main__":
