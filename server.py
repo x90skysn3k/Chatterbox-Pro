@@ -185,7 +185,7 @@ class TTSRequest(BaseModel):
     top_p: float = 0.8
     repetition_penalty: float = 2.0
     skip_normalization: bool = False
-    use_silero_vad: bool = False
+    use_silero_vad: bool = True
     num_candidates: int = 2
     max_attempts: int = 3
 
