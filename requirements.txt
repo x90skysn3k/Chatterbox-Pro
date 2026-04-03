@@ -6,7 +6,8 @@ fastapi
 uvicorn
 
 # Audio post-processing (not included in chatterbox-tts)
-auto-editor==27.1.1
+# auto-editor pinned to older version compatible with numpy<2
+auto-editor>=25.0.0,<27
 pyrnnoise>=0.3.8
 pyloudnorm>=0.2.0
 pydub

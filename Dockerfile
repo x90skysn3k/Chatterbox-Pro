@@ -18,9 +18,12 @@ RUN update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.12 1
 
 WORKDIR /app
 
-# Install Python deps first (cached layer)
+# Create venv and install deps (cached layer)
+RUN python3 -m venv /app/venv
+ENV PATH="/app/venv/bin:$PATH"
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir --upgrade pip && \
+    pip install --no-cache-dir -r requirements.txt
 
 # Copy application code
 COPY Chatter.py server.py test-models.py test-corpus.json ./
