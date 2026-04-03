@@ -15,7 +15,10 @@ import string
 import difflib
 import time
 import gc
-from chatterbox.src.chatterbox.tts import ChatterboxTTS
+try:
+    from chatterbox.src.chatterbox.tts import ChatterboxTTS
+except ImportError:
+    from chatterbox.tts import ChatterboxTTS
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import whisper
 import nltk
@@ -26,7 +29,10 @@ import csv
 import argparse
 import soundfile as sf
 import inspect, traceback
-from chatterbox.src.chatterbox.vc import ChatterboxVC
+try:
+    from chatterbox.src.chatterbox.vc import ChatterboxVC
+except ImportError:
+    from chatterbox.vc import ChatterboxVC
 try:
     import pyrnnoise
     _PYRNNOISE_AVAILABLE = True
@@ -244,7 +250,34 @@ elif torch.backends.mps.is_available():
 else:
     DEVICE = "cpu"
 
-print(f"🚀 Running on device: {DEVICE}")
+def get_gpu_dtype(override=None):
+    """Auto-detect optimal dtype for the current GPU.
+    - Ampere+ (compute ≥ 8.0): bfloat16 — halves VRAM, native support
+    - Volta/Turing (compute ≥ 7.0): float16 — good VRAM savings
+    - Pascal and older (compute < 7.0): float32 — only safe option
+    - MPS/CPU: float32
+    """
+    if override and override != "auto":
+        mapping = {"float32": torch.float32, "float16": torch.float16, "bfloat16": torch.bfloat16}
+        return mapping.get(override, torch.float32)
+    if not torch.cuda.is_available():
+        return torch.float32
+    cap = torch.cuda.get_device_capability()
+    if cap >= (8, 0):
+        return torch.bfloat16
+    if cap >= (7, 0):
+        return torch.float16
+    return torch.float32
+
+GPU_DTYPE = get_gpu_dtype(os.environ.get("CHATTERBOX_DTYPE"))
+
+if torch.cuda.is_available():
+    cap = torch.cuda.get_device_capability()
+    gpu_name = torch.cuda.get_device_name(0)
+    print(f"🚀 Running on device: {DEVICE} | GPU: {gpu_name} | Compute: {cap[0]}.{cap[1]} | Dtype: {GPU_DTYPE}")
+else:
+    print(f"🚀 Running on device: {DEVICE} | Dtype: {GPU_DTYPE}")
+
 # ---- Determinism (CUDA / PyTorch) ----
 import os as _os, torch as _torch
 _torch.backends.cudnn.benchmark = False
@@ -256,25 +289,30 @@ except Exception:
     pass
 _os.environ.setdefault("CUBLAS_WORKSPACE_CONFIG", ":16:8")
 if DEVICE == "cuda":
-    _torch.backends.cuda.matmul.allow_tf32 = False
-    _torch.backends.cudnn.allow_tf32 = False
+    # Allow tf32 on Ampere+ for speed, disable on older GPUs for precision
+    allow_tf32 = torch.cuda.get_device_capability() >= (8, 0)
+    _torch.backends.cuda.matmul.allow_tf32 = allow_tf32
+    _torch.backends.cudnn.allow_tf32 = allow_tf32
 # --------------------------------------
 
 MODEL = None
 
-def _free_vram():
+def _free_vram(label=""):
     """
     Best-effort VRAM/RAM cleanup before (re)initializing heavy models.
     Safe to call on CPU-only systems.
     """
     try:
-        torch.cuda.empty_cache()
-    except Exception:
-        pass
-    try:
         gc.collect()
     except Exception:
         pass
+    try:
+        torch.cuda.empty_cache()
+    except Exception:
+        pass
+    if label and torch.cuda.is_available():
+        alloc = torch.cuda.memory_allocated() / 1024 / 1024
+        print(f"\033[32m[VRAM] {label}: {alloc:.0f}MB allocated\033[0m")
 
 
 def load_whisper_backend(model_name, use_faster_whisper, device):
@@ -362,6 +400,62 @@ def remove_inline_reference_numbers(text):
     # Remove reference numbers after sentence-ending punctuation, but keep the punctuation
     pattern = r'([.!?,\"\'”’)\]])(\d+)(?=\s|$)'
     return re.sub(pattern, r'\1', text)
+
+
+_PAUSE_TAG_RE = re.compile(r'\[pause:([\d.]+)s?\]', re.IGNORECASE)
+
+def parse_pause_tags(text):
+    """
+    Parse [pause:Xs] tags from text.
+    Returns (cleaned_text, pause_markers) where pause_markers is a list of
+    (char_position_in_cleaned_text, duration_seconds).
+    The tags are stripped from the text so TTS never sees them.
+    """
+    markers = []
+    offset = 0
+    cleaned = text
+    for m in _PAUSE_TAG_RE.finditer(text):
+        duration = float(m.group(1))
+        # Position in cleaned text = original position minus cumulative removed chars
+        pos = m.start() - offset
+        markers.append((pos, duration))
+        offset += len(m.group(0))
+    cleaned = _PAUSE_TAG_RE.sub('', text)
+    # Clean up any double spaces left behind
+    cleaned = re.sub(r'  +', ' ', cleaned).strip()
+    return cleaned, markers
+
+
+def splice_pauses(waveform, sample_rate, text, pause_markers):
+    """
+    Insert silence into a waveform at positions corresponding to pause markers.
+    Pause markers reference character positions in the text. We estimate
+    audio position as (char_pos / total_chars) * audio_duration.
+    """
+    if not pause_markers:
+        return waveform
+    total_chars = max(len(text), 1)
+    total_samples = waveform.shape[-1]
+
+    # Convert char positions to sample positions, process in reverse to preserve offsets
+    insertions = []
+    for char_pos, duration in pause_markers:
+        sample_pos = int((char_pos / total_chars) * total_samples)
+        silence_samples = int(duration * sample_rate)
+        insertions.append((sample_pos, silence_samples))
+
+    # Sort by position descending so we can insert without shifting earlier positions
+    insertions.sort(key=lambda x: x[0], reverse=True)
+    for sample_pos, silence_samples in insertions:
+        silence = torch.zeros(waveform.shape[0], silence_samples)
+        sample_pos = min(sample_pos, waveform.shape[-1])
+        waveform = torch.cat([
+            waveform[:, :sample_pos],
+            silence,
+            waveform[:, sample_pos:],
+        ], dim=1)
+
+    return waveform
 
 
 def split_into_sentences(text):
@@ -1089,7 +1183,13 @@ def process_text_for_tts(
     if remove_reference_numbers:
         text = remove_inline_reference_numbers(text)
 
-    print("[DEBUG] After reference number removal:", repr(text))  # <--- ADD THIS LINE HERE
+    # Parse and strip [pause:Xs] tags before TTS sees the text
+    text, pause_markers = parse_pause_tags(text)
+    if pause_markers:
+        print(f"\033[32m[DEBUG] Found {len(pause_markers)} pause tag(s): {[(p, f'{d:.1f}s') for p, d in pause_markers]}\033[0m")
+
+    print("[DEBUG] After reference number removal:", repr(text))
+    _free_vram("before generation")
 
     os.makedirs("temp", exist_ok=True)
     os.makedirs("output", exist_ok=True)
@@ -1328,10 +1428,21 @@ def process_text_for_tts(
             continue
 
         full_audio = torch.cat(waveform_list, dim=1)
+        # Free individual chunk waveforms now that they're concatenated
+        del waveform_list
+
+        # Splice pause tags into the concatenated audio
+        if pause_markers:
+            full_audio = splice_pauses(full_audio, model.sr, text, pause_markers)
+            print(f"\033[32m[DEBUG] Spliced {len(pause_markers)} pause(s) into audio\033[0m")
+
+        _free_vram("after concatenation")
+
         timestamp = datetime.datetime.now().strftime("%Y-%m-%d_%H%M%S_%f")[:-3]
         filename_suffix = f"{timestamp}_gen{gen_index+1}_seed{this_seed}"
         wav_output = f"output/{input_basename}audio_{filename_suffix}.wav"
         torchaudio.save(wav_output, full_audio, model.sr)
+        del full_audio
         print(f"\33[104m[DEBUG] \33[5mFinal audio concatenated, output file: {wav_output}\033[0m")
 
         # --- DENOISE (optional, before Auto-Editor) ---
@@ -1466,6 +1577,7 @@ def process_text_for_tts(
         settings_for_json["output_audio_files"] = gen_outputs
         save_settings_json(settings_for_json, json_path)
 
+    _free_vram("after all generations")
     print(f"\033[1;36m[DEBUG] \33[6;4;3;34;102mALL GENERATIONS COMPLETE. Outputs:\033[0m\n" + "\n".join(output_paths))
     return output_paths
 

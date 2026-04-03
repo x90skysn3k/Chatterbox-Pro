@@ -1,0 +1,94 @@
+name: Tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install system deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg
+
+      - name: Install Python deps
+        run: |
+          pip install --no-cache-dir chatterbox-tts>=0.1.7 nltk fastapi uvicorn pydantic
+          pip install --no-cache-dir ruff
+
+      - name: Lint
+        run: ruff check --select=E,F,W --ignore=E501,E402,F841,W605 Chatter.py server.py
+
+      - name: Unit tests - pause tag parsing
+        run: |
+          python3 -c "
+          import sys
+          sys.path.insert(0, '.')
+          # Test pause tag parsing
+          import re
+          _PAUSE_TAG_RE = re.compile(r'\[pause:([\d.]+)s?\]', re.IGNORECASE)
+
+          text = 'Hello. [pause:1.5s] World. [pause:0.5s] End.'
+          markers = []
+          offset = 0
+          for m in _PAUSE_TAG_RE.finditer(text):
+              duration = float(m.group(1))
+              pos = m.start() - offset
+              markers.append((pos, duration))
+              offset += len(m.group(0))
+          cleaned = _PAUSE_TAG_RE.sub('', text)
+          cleaned = re.sub(r'  +', ' ', cleaned).strip()
+
+          assert len(markers) == 2, f'Expected 2 markers, got {len(markers)}'
+          assert markers[0][1] == 1.5, f'Expected 1.5s, got {markers[0][1]}'
+          assert markers[1][1] == 0.5, f'Expected 0.5s, got {markers[1][1]}'
+          assert '[pause' not in cleaned, f'Tags not stripped: {cleaned}'
+          print('PASS: pause tag parsing')
+          "
+
+      - name: Unit tests - GPU dtype detection
+        run: |
+          python3 -c "
+          import torch
+
+          def get_gpu_dtype(override=None):
+              if override and override != 'auto':
+                  mapping = {'float32': torch.float32, 'float16': torch.float16, 'bfloat16': torch.bfloat16}
+                  return mapping.get(override, torch.float32)
+              if not torch.cuda.is_available():
+                  return torch.float32
+              cap = torch.cuda.get_device_capability()
+              if cap >= (8, 0):
+                  return torch.bfloat16
+              if cap >= (7, 0):
+                  return torch.float16
+              return torch.float32
+
+          # On CI (no GPU) should return float32
+          assert get_gpu_dtype() == torch.float32
+          assert get_gpu_dtype('float16') == torch.float16
+          assert get_gpu_dtype('bfloat16') == torch.bfloat16
+          assert get_gpu_dtype('auto') == torch.float32  # no GPU
+          print('PASS: GPU dtype detection')
+          "
+
+      - name: Unit tests - server imports
+        run: |
+          python3 -c "
+          from fastapi import FastAPI
+          from pydantic import BaseModel
+          print('PASS: server imports')
+          "

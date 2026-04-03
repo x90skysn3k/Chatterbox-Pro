@@ -1,0 +1,102 @@
+{
+  "description": "Standardized test sentences for A/B model and pipeline comparison",
+  "version": "1.0",
+  "voice_reference": "executed-edge.wav",
+  "tests": [
+    {
+      "id": "simple-narration",
+      "text": "Most traders lose money not because they lack skill, but because they lack discipline.",
+      "difficulty": "easy",
+      "checks": ["prosody", "clarity"],
+      "notes": "Baseline test — clean sentence, no tricky words"
+    },
+    {
+      "id": "numbers-and-stats",
+      "text": "Exposed after three hundred days of trading. Ninety seven percent of retail traders lose money within their first year.",
+      "difficulty": "medium",
+      "checks": ["number-pronunciation", "pacing"],
+      "notes": "Tests number word sequences and stat delivery"
+    },
+    {
+      "id": "proper-names",
+      "text": "Jesse Livermore once said that the market is designed to fool most of the people, most of the time. Paul Tudor Jones agreed.",
+      "difficulty": "hard",
+      "checks": ["name-pronunciation", "quote-delivery"],
+      "notes": "Trader names that TTS often mispronounces"
+    },
+    {
+      "id": "emotional-range",
+      "text": "He watched his account drop from fifty thousand to twelve hundred in six weeks. His wife didn't know. His kids didn't know. He sat in his car in the driveway for forty minutes before walking inside.",
+      "difficulty": "hard",
+      "checks": ["emotional-tone", "pacing", "pause-delivery"],
+      "notes": "Requires emotional weight, natural pauses, somber tone"
+    },
+    {
+      "id": "technical-terms",
+      "text": "The Vix spiked above thirty five while the S and P futures were limit down. Every algos risk model screamed to liquidate.",
+      "difficulty": "hard",
+      "checks": ["acronyms", "technical-vocabulary"],
+      "notes": "Trading jargon and acronyms that trip up TTS"
+    },
+    {
+      "id": "short-punchy",
+      "text": "Stop. Think about that for a second. Your broker made money. The exchange made money. You lost money.",
+      "difficulty": "medium",
+      "checks": ["short-sentences", "emphasis", "rhythm"],
+      "notes": "Rapid-fire short sentences need distinct pauses and punch"
+    },
+    {
+      "id": "long-complex",
+      "text": "What separates the five percent who survive from the ninety five percent who blow up isn't intelligence, it isn't access to better tools, and it certainly isn't some secret indicator that nobody else knows about, it's the ability to sit on your hands when every fiber of your being screams at you to click that button.",
+      "difficulty": "hard",
+      "checks": ["long-sentence-prosody", "breath-control", "build-up"],
+      "notes": "Long compound sentence — tests breath pacing and dramatic build"
+    }
+  ],
+  "models": {
+    "current": {
+      "label": "Original (500M)",
+      "repo_id": "ResembleAI/chatterbox",
+      "params": {
+        "temperature": 0.75,
+        "exaggeration": 0.65,
+        "cfg_weight": 0.4
+      }
+    },
+    "hf-800m": {
+      "label": "HF-800M",
+      "repo_id": "ResembleAI/chatterbox-hf",
+      "params": {
+        "temperature": 0.75,
+        "exaggeration": 0.65,
+        "cfg_weight": 0.4
+      }
+    },
+    "turbo": {
+      "label": "Turbo (350M)",
+      "repo_id": "ResembleAI/chatterbox-turbo",
+      "params": {
+        "temperature": 0.8,
+        "exaggeration": 0.0,
+        "cfg_weight": 0.0
+      }
+    },
+    "multilingual": {
+      "label": "Multilingual (500M)",
+      "repo_id": "ResembleAI/chatterbox",
+      "variant": "multilingual",
+      "params": {
+        "temperature": 0.75,
+        "exaggeration": 0.65,
+        "cfg_weight": 0.4
+      }
+    }
+  },
+  "metrics": {
+    "whisper_threshold": 0.85,
+    "speaker_similarity_threshold": 0.75,
+    "mos_threshold": 3.5,
+    "max_silence_ratio": 0.20,
+    "peak_level_range_dbfs": [-6.0, -0.5]
+  }
+}
