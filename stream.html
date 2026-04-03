@@ -429,6 +429,7 @@
       <select id="voiceSelect">
         <option value="default.wav">default.wav</option>
       </select>
+      <button onclick="uploadVoice()" style="padding:8px 12px;background:#1a3a5c;border:1px solid #2a5a8c;color:#aaa;border-radius:6px;cursor:pointer;font-size:12px;" title="Upload voice sample">Upload</button>
     </div>
     <div class="btn-row" style="margin-bottom: 16px;">
       <button class="btn-primary" id="btnSpeak" onclick="startStream()">
@@ -438,6 +439,10 @@
       <button class="btn-danger" id="btnStop" onclick="stopStream()" disabled>
         <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><rect x="4" y="4" width="16" height="16" rx="2"/></svg>
         Stop
+      </button>
+      <button class="btn-primary" id="btnDownload" onclick="downloadAudio()" disabled style="background:#1a5c2a;border-color:#2d8a4e;">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M12 16l-6-6h4V4h4v6h4l-6 6zm-8 4h16v2H4v-2z"/></svg>
+        Download
       </button>
     </div>
   </div>
@@ -491,12 +496,14 @@ let isStreaming = false;
 let lastSourceNode = null;
 let animFrameId = null;
 let scheduledSources = [];
+let allPcmChunks = [];
 
 // ── DOM Refs ─────────────────────────────────────────────────────────
 const textInput = document.getElementById('textInput');
 const voiceSelect = document.getElementById('voiceSelect');
 const btnSpeak = document.getElementById('btnSpeak');
 const btnStop = document.getElementById('btnStop');
+const btnDownload = document.getElementById('btnDownload');
 const statLatency = document.getElementById('statLatency');
 const statChunks = document.getElementById('statChunks');
 const statTotal = document.getElementById('statTotal');
@@ -668,6 +675,8 @@ function startStream() {
   clearError();
   resetStats();
   stopPlayback();
+  allPcmChunks = [];
+  btnDownload.disabled = true;
 
   // Create or resume AudioContext (needs user gesture)
   if (!audioCtx || audioCtx.state === 'closed') {
@@ -766,6 +775,7 @@ function handleStatusMessage(msg) {
   }
   if (msg.done) {
     log('Server finished sending audio', 'success');
+    btnDownload.disabled = allPcmChunks.length === 0;
   }
 }
 
@@ -790,7 +800,8 @@ function handleAudioChunk(arrayBuffer) {
   statChunks.textContent = label;
   statChunks.className = 'stat-value active';
 
-  // Play the PCM16 chunk
+  // Store and play the PCM16 chunk
+  allPcmChunks.push(new Uint8Array(arrayBuffer));
   playPCM16(arrayBuffer);
 
   // Update total elapsed
@@ -901,6 +912,62 @@ function finishPlayback() {
   btnSpeak.disabled = false;
   btnStop.disabled = true;
   isStreaming = false;
+}
+
+// ── Download WAV ────────────────────────────────────────────────────
+function downloadAudio() {
+  if (allPcmChunks.length === 0) return;
+  // Merge all PCM chunks
+  const totalLen = allPcmChunks.reduce((a, c) => a + c.length, 0);
+  const merged = new Uint8Array(totalLen);
+  let offset = 0;
+  for (const chunk of allPcmChunks) {
+    merged.set(chunk, offset);
+    offset += chunk.length;
+  }
+  // Build WAV header (PCM16, 24kHz, mono)
+  const sr = 24000, ch = 1, bps = 16;
+  const dataLen = merged.length;
+  const header = new ArrayBuffer(44);
+  const v = new DataView(header);
+  const writeStr = (o, s) => { for (let i = 0; i < s.length; i++) v.setUint8(o + i, s.charCodeAt(i)); };
+  writeStr(0, 'RIFF'); v.setUint32(4, 36 + dataLen, true); writeStr(8, 'WAVE');
+  writeStr(12, 'fmt '); v.setUint32(16, 16, true); v.setUint16(20, 1, true);
+  v.setUint16(22, ch, true); v.setUint32(24, sr, true);
+  v.setUint32(28, sr * ch * bps / 8, true); v.setUint16(32, ch * bps / 8, true);
+  v.setUint16(34, bps, true); writeStr(36, 'data'); v.setUint32(40, dataLen, true);
+  const wav = new Blob([header, merged], { type: 'audio/wav' });
+  const url = URL.createObjectURL(wav);
+  const a = document.createElement('a');
+  a.href = url; a.download = `chatterbox-stream-${Date.now()}.wav`;
+  a.click(); URL.revokeObjectURL(url);
+  log('Downloaded WAV', 'success');
+}
+
+// ── Upload Voice Sample ─────────────────────────────────────────────
+async function uploadVoice() {
+  const input = document.createElement('input');
+  input.type = 'file'; input.accept = '.wav,.mp3,.flac';
+  input.onchange = async () => {
+    const file = input.files[0];
+    if (!file) return;
+    const form = new FormData();
+    form.append('file', file);
+    try {
+      const resp = await fetch('/upload-voice', { method: 'POST', body: form });
+      if (resp.ok) {
+        const data = await resp.json();
+        log(`Uploaded voice: ${data.filename}`, 'success');
+        await loadVoices();
+        voiceSelect.value = data.filename;
+      } else {
+        log(`Upload failed: ${await resp.text()}`, 'error');
+      }
+    } catch (e) {
+      log(`Upload error: ${e.message}`, 'error');
+    }
+  };
+  input.click();
 }
 
 // ── Keyboard Shortcut ────────────────────────────────────────────────

@@ -27,7 +27,7 @@ if EXTENDED_DIR not in sys.path:
 
 os.environ["GRADIO_ANALYTICS_ENABLED"] = "False"
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, UploadFile, File
 from fastapi.responses import Response, HTMLResponse, JSONResponse, FileResponse
 import json as _json
 from pydantic import BaseModel
@@ -689,6 +689,22 @@ async def list_voices():
     """List available voice files."""
     voices = [f for f in os.listdir(VOICES_DIR) if f.endswith(('.wav', '.mp3', '.flac'))]
     return JSONResponse({"voices": sorted(voices)})
+
+
+@app.post("/upload-voice")
+async def upload_voice(file: UploadFile = File(...)):
+    """Upload a voice reference WAV file."""
+    if not file.filename.endswith(('.wav', '.mp3', '.flac')):
+        return Response(content="Only .wav, .mp3, .flac files allowed", status_code=400)
+    # Sanitize filename
+    import re as _re
+    safe_name = _re.sub(r'[^a-zA-Z0-9._-]', '_', file.filename)
+    dest = os.path.join(VOICES_DIR, safe_name)
+    with open(dest, "wb") as f:
+        content = await file.read()
+        f.write(content)
+    logger.info(f"Voice uploaded: {safe_name} ({len(content)} bytes)")
+    return JSONResponse({"filename": safe_name, "size": len(content)})
 
 
 if __name__ == "__main__":

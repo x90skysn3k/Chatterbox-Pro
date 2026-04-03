@@ -201,6 +201,40 @@ X-Audio-Loudnorm: I=-16:TP=-1.5:LRA=11
 }
 ```
 
+#### `WS /stream` — Real-time streaming TTS (Turbo)
+
+WebSocket endpoint for instant TTS using the Chatterbox Turbo model (350M, 1-step decoder). Text is split into sentence chunks and audio streams as each chunk generates.
+
+```
+Client → { "text": "Hello world.", "voice": "default.wav" }
+Server → { "status": "generating", "text_length": 12 }
+Server → { "status": "chunks", "count": 1 }
+Server → { "status": "chunk", "index": 0, "total": 1, "gen_time": 1.2 }
+Server → [binary: PCM16 @ 24kHz mono]
+Server → { "status": "done", "chunks": 1, "elapsed": 1.2 }
+```
+
+Audio is raw PCM16 at 24kHz, one binary frame per chunk. Client plays chunks progressively via Web Audio API.
+
+#### `GET /stream-test` — Streaming test page
+
+Standalone HTML page with text input, voice selection, waveform visualization, and download. Open in browser to test streaming TTS.
+
+#### `GET /voices` — List voice files
+
+```json
+{ "voices": ["default.wav", "custom.wav"] }
+```
+
+#### `POST /upload-voice` — Upload voice reference
+
+Multipart file upload. Accepts `.wav`, `.mp3`, `.flac`.
+
+```bash
+curl -F "file=@my-voice.wav" http://localhost:8004/upload-voice
+# → { "filename": "my-voice.wav", "size": 48000 }
+```
+
 ---
 
 ## Audio Pipeline
