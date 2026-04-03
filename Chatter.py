@@ -817,7 +817,7 @@ def _load_silero_vad():
     return _SILERO_VAD_MODEL
 
 
-def _apply_silero_vad_trim(wav_path, min_silence_ms=300, max_silence_ms=500, speech_pad_ms=100):
+def _apply_silero_vad_trim(wav_path, min_silence_ms=300, max_silence_ms=400, speech_pad_ms=100):
     """
     Use Silero VAD for intelligent silence trimming. Preserves natural pauses
     (up to max_silence_ms) while removing dead air. Far superior to auto-editor's
@@ -880,7 +880,7 @@ def _apply_silero_vad_trim(wav_path, min_silence_ms=300, max_silence_ms=500, spe
         return False
 
 
-def _vad_trim_chunk(wav_path, speech_pad_ms=150):
+def _vad_trim_chunk(wav_path, speech_pad_ms=100):
     """
     Per-chunk VAD trim: removes only leading/trailing silence from a single chunk WAV.
     Preserves ALL internal pauses. Uses Silero VAD for speech-aware boundary detection.
