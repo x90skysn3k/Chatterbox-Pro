@@ -1250,7 +1250,6 @@ def process_one_chunk_deterministic(
                             break
                         time.sleep(0.05)
 
-                    _trim_trailing_silence(candidate_path)
                     duration = get_wav_duration(candidate_path)
                     print(f"\033[32m[DEBUG] [DET] Saved cand {cand_idx+1}, attempt {attempt+1}, duration={duration:.3f}s: {candidate_path}\033[0m")
                     candidates.append({
