@@ -33,18 +33,25 @@ from pydantic import BaseModel
 
 from logging.handlers import RotatingFileHandler
 
-LOG_FILE = "logs/server.log"
 os.makedirs("logs", exist_ok=True)
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s",
     handlers=[
         logging.StreamHandler(),
-        RotatingFileHandler(LOG_FILE, maxBytes=10*1024*1024, backupCount=3),
+        RotatingFileHandler("logs/server.log", maxBytes=10*1024*1024, backupCount=3),
     ],
 )
 logger = logging.getLogger("extended-server")
-logger.info(f"Logging to {LOG_FILE}")
+logger.info(f"Logging to logs/server.log")
+
+# Read version
+_VERSION = "unknown"
+_version_path = os.path.join(EXTENDED_DIR, "VERSION")
+if os.path.exists(_version_path):
+    with open(_version_path) as f:
+        _VERSION = f.read().strip()
+logger.info(f"Chatterbox Extended TTS Server v{_VERSION}")
 
 app = FastAPI(title="Chatterbox Extended TTS Server")
 
@@ -159,7 +166,7 @@ def ensure_model():
         from Chatter import get_or_load_model
         get_or_load_model()
         _model_loaded = True
-        logger.info("Model loaded!")
+        logger.info(f"Model loaded! (server v{_VERSION})")
 
 
 class TTSRequest(BaseModel):
@@ -332,7 +339,7 @@ async def index():
         done = sum(1 for j in _jobs.values() if j["status"] == "done")
     return (
         "<html><body>"
-        "<h1>Chatterbox Extended TTS Server (Async Job Queue)</h1>"
+        f"<h1>Chatterbox Extended TTS Server v{_VERSION}</h1>"
         f"<p>Active jobs: {active} | Completed: {done}</p>"
         "<p>POST /tts → returns job_id | GET /status/ID | GET /result/ID</p>"
         "</body></html>"
@@ -386,6 +393,7 @@ async def health():
 
     return JSONResponse({
         "status": "healthy",
+        "version": _VERSION,
         "uptime": uptime_str,
         "uptime_seconds": uptime,
         "model": {

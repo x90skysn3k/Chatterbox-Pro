@@ -272,6 +272,8 @@ class ChatterboxTTS:
         exaggeration: float=0.5,
         cfg_weight: float=0.5,
         temperature: float=0.8,
+        top_p: float=0.8,
+        repetition_penalty: float=2.0,
         apply_watermark: bool=False,
         generator: Optional[torch.Generator]=None,
     ) -> List[torch.Tensor]:
@@ -340,6 +342,8 @@ class ChatterboxTTS:
                 text_tokens=text_tokens,
                 max_new_tokens=1000,
                 temperature=temperature,
+                top_p=top_p,
+                repetition_penalty=repetition_penalty,
                 cfg_weight=cfg_weight,
                 generator=generator,
             )  # (B, Ts)
