@@ -9,3 +9,6 @@ venv/
 *.wav
 __pycache__/
 *.pyc
+
+# Project instructions (local only)
+CLAUDE.md

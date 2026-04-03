@@ -634,14 +634,62 @@ def smart_append_short_sentences(sentences, max_chars=300, min_chunk_len=80):
 
 def normalize_with_ffmpeg(input_wav, output_wav, method="ebu", i=-24, tp=-2, lra=7):
     if method == "ebu":
-        loudnorm = f"loudnorm=I={i}:TP={tp}:LRA={lra}"
-        (
-            ffmpeg
-            .input(input_wav)
-            .output(output_wav, af=loudnorm)
-            .overwrite_output()
-            .run(quiet=True)
+        # Two-pass EBU R128: measure first, then apply with measured values
+        import json as _json
+        loudnorm_filter = f"loudnorm=I={i}:TP={tp}:LRA={lra}:print_format=json"
+        # Pass 1: measure
+        result = subprocess.run(
+            ["ffmpeg", "-i", input_wav, "-af", loudnorm_filter, "-f", "null", "/dev/null"],
+            capture_output=True, text=True
         )
+        # Parse measured values from stderr (ffmpeg outputs stats there)
+        stderr = result.stderr
+        try:
+            # Find the JSON block in stderr
+            json_start = stderr.rfind('{')
+            json_end = stderr.rfind('}') + 1
+            if json_start >= 0 and json_end > json_start:
+                measured = _json.loads(stderr[json_start:json_end])
+                measured_i = measured.get("input_i", i)
+                measured_tp = measured.get("input_tp", tp)
+                measured_lra = measured.get("input_lra", lra)
+                measured_thresh = measured.get("input_thresh", "-70.0")
+                offset = measured.get("target_offset", "0.0")
+                # Pass 2: apply with measured values for linear normalization
+                loudnorm_pass2 = (
+                    f"loudnorm=I={i}:TP={tp}:LRA={lra}"
+                    f":measured_I={measured_i}:measured_TP={measured_tp}"
+                    f":measured_LRA={measured_lra}:measured_thresh={measured_thresh}"
+                    f":offset={offset}:linear=true"
+                )
+                (
+                    ffmpeg
+                    .input(input_wav)
+                    .output(output_wav, af=loudnorm_pass2)
+                    .overwrite_output()
+                    .run(quiet=True)
+                )
+            else:
+                # Fallback to single-pass if measurement parsing fails
+                print("[WARNING] Two-pass loudnorm measurement failed, falling back to single-pass")
+                loudnorm = f"loudnorm=I={i}:TP={tp}:LRA={lra}"
+                (
+                    ffmpeg
+                    .input(input_wav)
+                    .output(output_wav, af=loudnorm)
+                    .overwrite_output()
+                    .run(quiet=True)
+                )
+        except Exception as e:
+            print(f"[WARNING] Two-pass loudnorm failed ({e}), falling back to single-pass")
+            loudnorm = f"loudnorm=I={i}:TP={tp}:LRA={lra}"
+            (
+                ffmpeg
+                .input(input_wav)
+                .output(output_wav, af=loudnorm)
+                .overwrite_output()
+                .run(quiet=True)
+            )
     elif method == "peak":
         (
             ffmpeg
@@ -650,7 +698,6 @@ def normalize_with_ffmpeg(input_wav, output_wav, method="ebu", i=-24, tp=-2, lra
             .overwrite_output()
             .run(quiet=True)
         )
-
     else:
         raise ValueError("Unknown normalization method.")
     os.replace(output_wav, input_wav)
@@ -661,7 +708,7 @@ def _convert_to_pcm48k_mono(input_wav, output_wav, sr=48000):
     """
     subprocess.run([
         "ffmpeg", "-y", "-i", input_wav,
-        "-ac", "2", "-ar", str(sr), "-sample_fmt", "s16", output_wav
+        "-ac", "1", "-ar", str(sr), "-sample_fmt", "s16", output_wav
     ], check=True)
 
 
@@ -842,9 +889,11 @@ def crossfade_waveforms(waveform_list, sr, crossfade_ms=50):
             result = torch.cat([result, next_wav], dim=1)
             continue
 
-        # Fade-out ramp for tail of current, fade-in ramp for head of next
-        fade_out = torch.linspace(1.0, 0.0, crossfade_samples, device=result.device).unsqueeze(0)
-        fade_in = torch.linspace(0.0, 1.0, crossfade_samples, device=next_wav.device).unsqueeze(0)
+        # Ensure same device to prevent mismatch
+        next_wav = next_wav.to(result.device)
+        # Equal-power (sqrt) crossfade for smooth energy transitions
+        fade_out = torch.sqrt(torch.linspace(1.0, 0.0, crossfade_samples, device=result.device)).unsqueeze(0)
+        fade_in = torch.sqrt(torch.linspace(0.0, 1.0, crossfade_samples, device=result.device)).unsqueeze(0)
 
         # Extract overlap regions
         tail = result[:, -crossfade_samples:] * fade_out
@@ -1570,7 +1619,7 @@ def process_text_for_tts(
                                     continue
                                 path, score, transcribed = whisper_check_mp(candidate_path, sentence_group, whisper_model, use_faster_whisper)
                                 print(f"\033[32m[DEBUG] [Chunk {chunk_idx}] RETRY {os.path.basename(candidate_path)}: score={score:.3f}, transcript=\033[33m'{transcribed}'\033[0m")
-                                if score >= 0.95:
+                                if score >= 0.85:
                                     chunk_validations[chunk_idx].append((cand['duration'], cand['path'], score, len(sentence_group)))
                                 else:
                                     chunk_failed_candidates[chunk_idx].append((score, cand['path'], transcribed))
@@ -1658,19 +1707,6 @@ def process_text_for_tts(
         del full_audio
         print(f"\33[104m[DEBUG] \33[5mFinal audio concatenated, output file: {wav_output}\033[0m")
 
-        # --- DENOISE (optional, before Auto-Editor) ---
-        if use_pyrnnoise:
-            if _PYRNNOISE_AVAILABLE:
-                try:
-                    if _apply_pyrnnoise_in_place(wav_output):
-                        print(f"\033[32m[DEBUG] Denoised with RNNoise before Auto-Editor: {wav_output}\033[0m")
-                    else:
-                        print(f"\033[33m[WARNING] RNNoise returned False; continuing without denoise.\033[0m")
-                except Exception as e:
-                    print(f"[ERROR] RNNoise failed: {e}")
-            else:
-                print("[WARNING] pyrnnoise not installed; skipping denoise.")
-                
         if use_auto_editor:
             try:
                 cleaned_output = wav_output.replace(".wav", "_cleaned.wav")
@@ -1704,6 +1740,19 @@ def process_text_for_tts(
                 _apply_silero_vad_trim(wav_output)
             except Exception as e:
                 print(f"[ERROR] Silero VAD trim failed: {e}")
+
+        # --- DENOISE (optional, after silence trimming) ---
+        if use_pyrnnoise:
+            if _PYRNNOISE_AVAILABLE:
+                try:
+                    if _apply_pyrnnoise_in_place(wav_output):
+                        print(f"\033[32m[DEBUG] Denoised with RNNoise after silence trimming: {wav_output}\033[0m")
+                    else:
+                        print(f"\033[33m[WARNING] RNNoise returned False; continuing without denoise.\033[0m")
+                except Exception as e:
+                    print(f"[ERROR] RNNoise failed: {e}")
+            else:
+                print("[WARNING] pyrnnoise not installed; skipping denoise.")
 
         if normalize_audio:
             try:

@@ -271,7 +271,9 @@ def _run_generation(job_id, request, voice_path):
         shutil.move(output_path, job_output)
 
         file_size = os.path.getsize(job_output)
-        elapsed = round(time.time() - _jobs[job_id]["started"])
+        with _jobs_lock:
+            started_time = _jobs[job_id]["started"]
+        elapsed = round(time.time() - started_time)
         logger.info(f"[{job_id}] Done: {job_output} ({file_size} bytes, {elapsed}s)")
 
         _generation_count += 1
@@ -307,6 +309,19 @@ def _cleanup_old_jobs():
         active = sum(1 for j in _jobs.values() if j["status"] == "processing")
     if active == 0 and expired:
         _force_vram_cleanup()
+
+    # Cleanup temp files older than 24 hours
+    temp_cutoff = time.time() - 86400
+    try:
+        for f in os.listdir("temp"):
+            fpath = os.path.join("temp", f)
+            if os.path.isfile(fpath) and os.path.getmtime(fpath) < temp_cutoff:
+                try:
+                    os.remove(fpath)
+                except OSError:
+                    pass
+    except Exception:
+        pass
 
 
 @app.get("/", response_class=HTMLResponse)
