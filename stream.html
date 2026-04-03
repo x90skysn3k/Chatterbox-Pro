@@ -773,7 +773,7 @@ function handleStatusMessage(msg) {
   if (msg.chunk !== undefined) {
     log(`Generating chunk ${msg.chunk}/${totalChunks || '?'}`, 'info');
   }
-  if (msg.done) {
+  if (msg.status === 'done' || msg.done) {
     log('Server finished sending audio', 'success');
     btnDownload.disabled = allPcmChunks.length === 0;
   }
