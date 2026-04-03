@@ -234,7 +234,7 @@ def _run_generation(job_id, request, voice_path):
                 cfgw_input=request.cfg_weight,
                 use_pyrnnoise=True,
                 use_auto_editor=not request.use_silero_vad,
-                ae_threshold=0.03,
+                ae_threshold=0.04,
                 ae_margin=0.4,
                 export_formats=["wav"],
                 enable_batching=False,
