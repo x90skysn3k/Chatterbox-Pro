@@ -817,7 +817,7 @@ def _load_silero_vad():
     return _SILERO_VAD_MODEL
 
 
-def _apply_silero_vad_trim(wav_path, min_silence_ms=300, max_silence_ms=500, speech_pad_ms=100):
+def _apply_silero_vad_trim(wav_path, min_silence_ms=300, max_silence_ms=400, speech_pad_ms=100):
     """
     Use Silero VAD for intelligent silence trimming. Preserves natural pauses
     (up to max_silence_ms) while removing dead air. Far superior to auto-editor's
@@ -877,6 +877,52 @@ def _apply_silero_vad_trim(wav_path, min_silence_ms=300, max_silence_ms=500, spe
 
     except Exception as e:
         print(f"[VAD] Silero VAD trim failed: {e}")
+        return False
+
+
+def _vad_trim_chunk(wav_path, speech_pad_ms=100):
+    """
+    Per-chunk VAD trim: removes only leading/trailing silence from a single chunk WAV.
+    Preserves ALL internal pauses. Uses Silero VAD for speech-aware boundary detection.
+    Gentler than _apply_silero_vad_trim which also caps internal silence.
+    """
+    try:
+        model, utils = _load_silero_vad()
+        get_speech_timestamps = utils[0]
+        read_audio = utils[2]
+
+        wav_16k = read_audio(wav_path, sampling_rate=16000)
+        speech_timestamps = get_speech_timestamps(
+            wav_16k, model,
+            threshold=0.5,
+            min_silence_duration_ms=9999,  # Don't split on internal silence
+            speech_pad_ms=speech_pad_ms,   # Gentle padding around speech edges
+            return_seconds=False,
+            sampling_rate=16000,
+        )
+
+        if not speech_timestamps:
+            print(f"[VAD-CHUNK] No speech detected in {os.path.basename(wav_path)} — skipping")
+            return False
+
+        # Trim to first speech start → last speech end
+        waveform, sr = torchaudio.load(wav_path)
+        scale = sr / 16000
+        speech_start = max(0, int(speech_timestamps[0]['start'] * scale))
+        speech_end = min(waveform.shape[1], int(speech_timestamps[-1]['end'] * scale))
+
+        if speech_end - speech_start >= waveform.shape[1] - int(sr * 0.05):
+            return False  # Nothing meaningful to trim (<50ms)
+
+        trimmed = waveform[:, speech_start:speech_end]
+        torchaudio.save(wav_path, trimmed, sr)
+
+        removed_ms = (waveform.shape[1] - trimmed.shape[1]) / sr * 1000
+        print(f"[VAD-CHUNK] Trimmed {os.path.basename(wav_path)}: removed {removed_ms:.0f}ms (lead+trail)")
+        return True
+
+    except Exception as e:
+        print(f"[VAD-CHUNK] Failed on {os.path.basename(wav_path)}: {e}")
         return False
 
 
@@ -1250,7 +1296,7 @@ def process_one_chunk_deterministic(
                             break
                         time.sleep(0.05)
 
-                    _trim_trailing_silence(candidate_path)
+                    _vad_trim_chunk(candidate_path)
                     duration = get_wav_duration(candidate_path)
                     print(f"\033[32m[DEBUG] [DET] Saved cand {cand_idx+1}, attempt {attempt+1}, duration={duration:.3f}s: {candidate_path}\033[0m")
                     candidates.append({

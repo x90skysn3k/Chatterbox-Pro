@@ -205,38 +205,56 @@ X-Audio-Loudnorm: I=-16:TP=-1.5:LRA=11
 
 ```
 Text Input
-  |
-  v
+  │
+  ▼
 Text Preprocessing (spacing, dot-letters, sound words, pause tags)
-  |
-  v
+  │
+  ▼
 Sentence Tokenization (NLTK) + Smart Batching (min 80 chars, max 300)
-  |
-  v
+  │
+  ▼
 Per-Chunk Generation (2 candidates, deterministic seeds, parallel workers)
-  |  - top_p + repetition_penalty forwarded to T3 sampling
-  |  - Trailing noise trimmed from each candidate
-  v
+  │  top_p + repetition_penalty forwarded to T3 sampling
+  │
+  ▼
+Per-Chunk VAD Trim (Silero VAD removes leading/trailing silence per chunk)
+  │  preserves all internal pauses, 150ms speech padding
+  │
+  ▼
 Whisper Validation (faster-whisper medium, fuzzy match > 0.85)
-  |  retry up to 3x per candidate if failed (same 0.85 threshold)
-  v
+  │  retry up to 3x per candidate if failed (same 0.85 threshold)
+  │
+  ▼
 Multi-Factor Candidate Scoring (whisper accuracy + speaking rate + duration)
-  |
-  v
+  │
+  ▼
 Equal-Power Crossfade Concatenation (50ms sqrt overlap-add)
-  |  + pause tag splicing
-  v
-Auto-Editor (silence trim, threshold=0.02, margin=0.4s)
-  |  OR Silero VAD (intelligent speech-aware trimming, opt-in)
-  v
-pyrnnoise Denoising (neural noise reduction, mono 48kHz)
-  |
-  v
-Two-Pass EBU R128 Loudnorm (-16 LUFS, -1.5 TP, 11 LRA)
-  |  measure → apply with linear=true (preserves dynamics)
-  v
+  │  + pause tag splicing
+  │
+  ▼
+Post-Concatenation Processing (in order):
+  │
+  ├─ Auto-Editor (silence trim, threshold=0.04, margin=0.4s)
+  │    OR Silero VAD (caps internal silence at 500ms, default)
+  │
+  ├─ pyrnnoise Denoising (neural noise reduction, mono 48kHz)
+  │
+  └─ Two-Pass EBU R128 Loudnorm (-16 LUFS, -1.5 TP, 11 LRA)
+       measure → apply with linear=true (preserves dynamics)
+  │
+  ▼
 Output WAV (192kHz)
 ```
+
+### Two-Stage VAD Pipeline
+
+Silero VAD runs twice with different goals:
+
+1. **Per-chunk VAD** (`_vad_trim_chunk`) — Runs on each candidate WAV after generation. Only trims leading/trailing non-speech. Uses `min_silence_duration_ms=9999` so it never splits on internal pauses. This ensures chunks have clean edges for crossfade blending.
+
+2. **Final VAD** (`_apply_silero_vad_trim`) — Runs on the concatenated audio. Caps any internal silence gaps longer than 500ms. Polishes the overall pacing after crossfade.
+
+When `use_silero_vad=true` (default), both stages run and auto-editor is skipped. Set `use_silero_vad=false` to use auto-editor instead (amplitude-based, less intelligent).
 
 ---
 
