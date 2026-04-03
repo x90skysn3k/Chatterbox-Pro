@@ -1562,6 +1562,13 @@ def process_text_for_tts(
         i = 0
         while i < len(chunks):
             current = chunks[i].strip()
+            # Short final chunk: try merging backward instead of leaving it orphaned
+            if i == len(chunks) - 1 and len(current) < min_len and not _is_dramatic_pause(current) and out:
+                backward = out[-1] + " " + current
+                if len(backward) <= max_len:
+                    out[-1] = backward
+                    i += 1
+                    continue
             if len(current) >= min_len or i == len(chunks) - 1 or _is_dramatic_pause(current):
                 out.append(current)
                 i += 1
