@@ -605,11 +605,29 @@ def group_sentences(sentences, max_chars=300):
     return chunks
 
 def _is_dramatic_pause(text):
-    """Check if a sentence ends with a dramatic pause marker (ellipsis) and should not be merged."""
-    return text.rstrip().endswith('...')
+    """Check if a sentence should stay separate for dramatic effect."""
+    t = text.rstrip()
+    if not t:
+        return False
+    # Ellipsis endings
+    if t.endswith('...'):
+        return True
+    # Short emphatic sentences (1-3 words ending in . ! ?)
+    if len(t) < 25 and t[-1] in '.!?' and len(t.split()) <= 3:
+        return True
+    return False
 
 
 def smart_append_short_sentences(sentences, max_chars=300, min_chunk_len=80):
+    # Pre-split overlong sentences that would exceed max chunk size
+    expanded = []
+    for s in sentences:
+        if len(s.strip()) > max_chars:
+            expanded.extend(split_long_sentence(s.strip(), max_len=max_chars))
+        else:
+            expanded.append(s)
+    sentences = expanded
+
     new_groups = []
     i = 0
     while i < len(sentences):
@@ -1554,7 +1572,7 @@ def process_text_for_tts(
     for f in os.listdir("temp"):
         os.remove(os.path.join("temp", f))
 
-    sentences = split_into_sentences(text)
+    sentences = [s for s in split_into_sentences(text) if s.strip()]
     print(f"\033[32m[DEBUG] Split text into {len(sentences)} sentences.\033[0m")
 
     def enforce_min_chunk_length(chunks, min_len=80, max_len=300):
