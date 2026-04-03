@@ -112,8 +112,12 @@ class TeeWriter:
             return
         # Only parse lines with progress markers — skip tqdm spam to avoid lock contention
         line = text.strip()
-        if not any(marker in line for marker in ("[DET]", "[PROGRESS]", "[DENOISE]", "auto-editor", "ffmpeg normalization", "ALL GENERATIONS")):
+        if not any(marker in line for marker in ("[DET]", "[PROGRESS]", "[DENOISE]", "[VAD]", "[TRIM]", "[CACHE]", "auto-editor", "ffmpeg normalization", "ALL GENERATIONS", "composite_score", "Selected", "WARNING")):
             return
+        # Forward quality pipeline output to log file for debugging
+        # Strip ANSI color codes for clean log output
+        clean = re.sub(r'\x1b\[[0-9;]*m', '', line)
+        logger.info(f"[{self.job_id}] {clean}")
         with _jobs_lock:
             job = _jobs.get(self.job_id)
             if not job:
@@ -140,7 +144,9 @@ class TeeWriter:
             if m:
                 job["last_duration"] = float(m.group(3))
 
-            if _DENOISE_RE.search(line):
+            if "[VAD]" in line:
+                job["stage"] = "vad-trimming"
+            elif _DENOISE_RE.search(line):
                 job["stage"] = "denoising"
             elif _AUTOEDITOR_RE.search(line):
                 job["stage"] = "auto-editor"
