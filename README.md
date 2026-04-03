@@ -1,13 +1,15 @@
-# Chatterbox-TTS-Extended
+# Chatterbox-Pro
 
 Production TTS pipeline based on [Chatterbox-TTS](https://github.com/resemble-ai/chatterbox) with async job queue, multi-candidate Whisper validation, neural denoising, and automated quality comparison.
+
+> Built on [Chatterbox TTS](https://github.com/resemble-ai/chatterbox) by Resemble AI and [Chatterbox-TTS-Extended](https://github.com/petermg/Chatterbox-TTS-Extended) by petermg.
 
 ## Quick Start (Docker)
 
 ```bash
 # Clone and start
-git clone https://github.com/x90skysn3k/Chatterbox-TTS-Extended.git
-cd Chatterbox-TTS-Extended
+git clone https://github.com/x90skysn3k/Chatterbox-Pro.git
+cd Chatterbox-Pro
 
 # Add your voice reference file
 cp /path/to/your-voice.wav voices/default.wav
@@ -281,7 +283,7 @@ npm run qa:tts-compare -- --models current --local --quick
 ### What it produces
 
 ```
-tools/chatterbox-extended/qa-compare/
+tools/chatterbox-pro/qa-compare/
   2026-04-03T14-30-00/
     report.html          <-- Open this! Audio players + metrics side-by-side
     metrics/results.json
@@ -317,33 +319,6 @@ tools/chatterbox-extended/qa-compare/
 
 ---
 
-## Deploy to P40 for Testing
-
-Rapid iteration without git commits:
-
-```bash
-# Edit locally, deploy to P40, restart server
-./tools/chatterbox-extended/deploy-p40.sh --restart
-
-# Deploy + install new deps
-./tools/chatterbox-extended/deploy-p40.sh --restart --deps
-
-# Deploy + tail logs
-./tools/chatterbox-extended/deploy-p40.sh --restart --logs
-
-# Just sync files (no restart)
-./tools/chatterbox-extended/deploy-p40.sh
-```
-
-The deploy script is gitignored. Workflow:
-1. Edit files locally
-2. `./deploy-p40.sh --restart`
-3. `./run.sh tts-compare-quick`
-4. Listen to `report.html`, iterate
-5. When happy: `git add && git commit`
-
----
-
 ## Voice Settings (Production)
 
 | Parameter | Value | Notes |
@@ -369,8 +344,8 @@ The deploy script is gitignored. Workflow:
 
 ```bash
 # Server managed by systemd
-ssh root@ai.tiden.local "systemctl restart chatterbox-extended"
-ssh root@ai.tiden.local "journalctl -u chatterbox-extended -f"
+ssh root@ai.tiden.local "systemctl restart chatterbox-pro"
+ssh root@ai.tiden.local "journalctl -u chatterbox-pro -f"
 
 # Check VRAM
 ssh root@ai.tiden.local "nvidia-smi"
@@ -382,7 +357,7 @@ curl http://ai.tiden.local:8004/health
 ### M1 Max (Fallback)
 
 ```bash
-cd tools/chatterbox-extended
+cd tools/chatterbox-pro
 source venv/bin/activate
 KMP_DUPLICATE_LIB_OK=TRUE python server.py
 # Runs on port 8004 locally
@@ -397,7 +372,7 @@ Differences: `use_faster_whisper=False` (needs CUDA), `num_parallel_workers=1` (
 ### Memory leak on P40
 VRAM usage grows over time. Server now runs VRAM cleanup between jobs automatically, but restart after every 2-3 videos if needed:
 ```bash
-ssh root@ai.tiden.local "systemctl restart chatterbox-extended"
+ssh root@ai.tiden.local "systemctl restart chatterbox-pro"
 ```
 The `/health` endpoint reports `vram.used_pct` — restart when approaching 80%.
 
