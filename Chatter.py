@@ -604,12 +604,18 @@ def group_sentences(sentences, max_chars=300):
 
     return chunks
 
+def _is_dramatic_pause(text):
+    """Check if a sentence ends with a dramatic pause marker (ellipsis) and should not be merged."""
+    return text.rstrip().endswith('...')
+
+
 def smart_append_short_sentences(sentences, max_chars=300, min_chunk_len=80):
     new_groups = []
     i = 0
     while i < len(sentences):
         current = sentences[i].strip()
-        if len(current) >= min_chunk_len:
+        # Keep sentences with dramatic pauses as separate chunks regardless of length
+        if len(current) >= min_chunk_len or _is_dramatic_pause(current):
             new_groups.append(current)
             i += 1
         else:
@@ -1556,7 +1562,7 @@ def process_text_for_tts(
         i = 0
         while i < len(chunks):
             current = chunks[i].strip()
-            if len(current) >= min_len or i == len(chunks) - 1:
+            if len(current) >= min_len or i == len(chunks) - 1 or _is_dramatic_pause(current):
                 out.append(current)
                 i += 1
             else:
