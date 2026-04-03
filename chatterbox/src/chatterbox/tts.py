@@ -1,6 +1,7 @@
 from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Optional
+import hashlib
 
 import librosa
 import torch
@@ -9,6 +10,7 @@ import threading
 from huggingface_hub import hf_hub_download
 from safetensors.torch import load_file
 import numpy as np
+import perth
 
 # Watermark uses Python/NumPy RNG; serialize just that tiny section (kept for safety).
 _WATERMARK_LOCK = threading.Lock()
@@ -70,7 +72,7 @@ class ChatterboxTTS:
         self.tokenizer = tokenizer
         self.device = device
         self.conds = conds
-        # self.watermarker = perth.PerthImplicitWatermarker()
+        self.watermarker = perth.PerthImplicitWatermarker()
         self.default_conds = conds
 
     @classmethod
@@ -114,7 +116,37 @@ class ChatterboxTTS:
         return cls.from_local(Path(local_path).parent, device)
 
     # ---------- Conditionals helpers ----------
+    _conds_cache: dict = {}  # class-level cache: {wav_hash: (Conditionals, hash)}
+
+    @staticmethod
+    def _file_hash(fpath) -> str:
+        h = hashlib.md5()
+        with open(fpath, "rb") as f:
+            for chunk in iter(lambda: f.read(65536), b""):
+                h.update(chunk)
+        return h.hexdigest()
+
     def _build_conditionals(self, wav_fpath, exaggeration=0.5) -> Conditionals:
+        wav_fpath_str = str(wav_fpath)
+        wav_hash = self._file_hash(wav_fpath_str)
+
+        # Check file-based cache (persisted to disk)
+        cache_path = Path(wav_fpath_str + ".conds.pt")
+        hash_path = Path(wav_fpath_str + ".conds.hash")
+        if cache_path.exists() and hash_path.exists():
+            cached_hash = hash_path.read_text().strip()
+            if cached_hash == wav_hash:
+                try:
+                    map_loc = torch.device('cpu') if self.device in ("cpu", "mps") else None
+                    conds = Conditionals.load(cache_path, map_location=map_loc).to(self.device)
+                    # Apply the requested exaggeration (cache stores base conditionals)
+                    conds.t3.emotion_adv = torch.ones(1, 1, 1, device=self.device) * exaggeration
+                    print(f"[CACHE] Loaded cached conditionals for {Path(wav_fpath_str).name}")
+                    return conds
+                except Exception as e:
+                    print(f"[CACHE] Failed to load cache, recomputing: {e}")
+
+        # Compute fresh conditionals
         s3gen_ref_wav, _sr = librosa.load(wav_fpath, sr=S3GEN_SR)
         ref_16k_wav = librosa.resample(s3gen_ref_wav, orig_sr=S3GEN_SR, target_sr=S3_SR)
 
@@ -135,7 +167,17 @@ class ChatterboxTTS:
             cond_prompt_speech_tokens=t3_cond_prompt_tokens,
             emotion_adv=torch.ones(1, 1, 1, device=self.device) * exaggeration,
         ).to(device=self.device)
-        return Conditionals(t3_cond, s3gen_ref_dict)
+        conds = Conditionals(t3_cond, s3gen_ref_dict)
+
+        # Save cache to disk
+        try:
+            conds.save(cache_path)
+            hash_path.write_text(wav_hash)
+            print(f"[CACHE] Saved conditionals cache for {Path(wav_fpath_str).name}")
+        except Exception as e:
+            print(f"[CACHE] Failed to save cache: {e}")
+
+        return conds
 
     def _clone_conditionals(self, conds: Conditionals, exaggeration=None) -> Conditionals:
         _cond: T3Cond = conds.t3
@@ -187,14 +229,18 @@ class ChatterboxTTS:
                 if self.device == "cuda":
                     torch.cuda.manual_seed_all(seed_int)
 
-            speech_tokens = self.t3.inference(
+            # Pass generator only if T3 supports it (pip version may not)
+            t3_kwargs = dict(
                 t3_cond=conds_local.t3,
                 text_tokens=text_tokens,
                 max_new_tokens=1000,
                 temperature=temperature,
                 cfg_weight=cfg_weight,
-                generator=generator,
             )
+            import inspect
+            if generator is not None and "generator" in inspect.signature(self.t3.inference).parameters:
+                t3_kwargs["generator"] = generator
+            speech_tokens = self.t3.inference(**t3_kwargs)
             speech_tokens = speech_tokens[0]
             speech_tokens = drop_invalid_tokens(speech_tokens)
             speech_tokens = speech_tokens[speech_tokens < 6561]
@@ -205,10 +251,14 @@ class ChatterboxTTS:
                 ref_dict=conds_local.gen,
             )
             wav_np = wav.squeeze(0).detach().cpu().numpy()
+            del wav, speech_tokens
             if apply_watermark and hasattr(self, "watermarker"):
                 with _WATERMARK_LOCK:
                     wav_np = self.watermarker.apply_watermark(wav_np, sample_rate=self.sr)
-            return torch.from_numpy(wav_np).unsqueeze(0)
+
+        # Free conditionals outside inference_mode to avoid VRAM accumulation
+        del conds_local, text_tokens
+        return torch.from_numpy(wav_np).unsqueeze(0)
 
     # ---------- Batched (vectorized sampler) ----------
     def generate_batch(

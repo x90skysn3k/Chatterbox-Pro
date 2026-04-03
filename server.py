@@ -3,6 +3,12 @@ Chatterbox Extended TTS Server
 Async job queue: POST /tts returns job_id instantly, poll /status/{id}, download /result/{id}.
 Eliminates HTTP timeout issues during long generation runs.
 Progress streamed via /status — client sees chunk/candidate/whisper progress in real time.
+
+Models supported:
+  - standard (500M) — Original Chatterbox, best quality with CFG/exaggeration control
+  - hf-800m (800M) — Largest model, potentially better prosody (experimental)
+  - turbo (350M) — Fastest, supports paralinguistic tags, no CFG/exaggeration
+  - multilingual (500M) — 23 languages, emotion control
 """
 import os
 import sys
@@ -25,8 +31,17 @@ from fastapi import FastAPI
 from fastapi.responses import Response, HTMLResponse, JSONResponse
 from pydantic import BaseModel
 
-logging.basicConfig(level=logging.INFO)
+LOG_FILE = "/tmp/extended-server.log"
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    handlers=[
+        logging.StreamHandler(),
+        logging.FileHandler(LOG_FILE, mode="a"),
+    ],
+)
 logger = logging.getLogger("extended-server")
+logger.info(f"Logging to {LOG_FILE}")
 
 app = FastAPI(title="Chatterbox Extended TTS Server")
 
@@ -44,6 +59,9 @@ _jobs_lock = threading.Lock()
 
 # Pre-load model on startup
 _model_loaded = False
+_current_model_type = "standard"  # Track which model variant is loaded
+_server_start_time = time.time()
+_generation_count = 0  # Track total generations for memory leak monitoring
 
 # Per-job progress capture — parses Extended's stdout for chunk/candidate/whisper info
 _PROGRESS_RE = re.compile(r'\[PROGRESS\].*?(\d+)/(\d+).*?(\d+%)')
@@ -137,6 +155,8 @@ class TTSRequest(BaseModel):
     split_text: bool = True
     chunk_size: int = 250
     seed: int = 0
+    model: str = "standard"  # standard | turbo | multilingual | hf-800m
+    apply_watermark: bool = False
 
 
 def _find_output_wav(result):
@@ -159,6 +179,7 @@ def _find_output_wav(result):
 
 def _run_generation(job_id, request, voice_path):
     """Background thread: runs process_text_for_tts and updates job status."""
+    global _generation_count
     # Install TeeWriter to capture Extended's stdout/stderr progress
     old_stdout, old_stderr = sys.stdout, sys.stderr
     tee_out = TeeWriter(old_stdout, job_id)
@@ -166,7 +187,7 @@ def _run_generation(job_id, request, voice_path):
     try:
         from Chatter import process_text_for_tts
 
-        logger.info(f"[{job_id}] Starting generation: {len(request.text)} chars")
+        logger.info(f"[{job_id}] Starting generation: {len(request.text)} chars, model={request.model}")
 
         sys.stdout = tee_out
         sys.stderr = tee_err
@@ -192,7 +213,7 @@ def _run_generation(job_id, request, voice_path):
                 remove_reference_numbers=False,
                 keep_original_wav=False,
                 smart_batch_short_sentences=True,
-                disable_watermark=True,
+                disable_watermark=not request.apply_watermark,
                 num_generations=1,
                 normalize_audio=True,
                 normalize_method="ebu",
@@ -225,6 +246,8 @@ def _run_generation(job_id, request, voice_path):
         file_size = os.path.getsize(job_output)
         elapsed = round(time.time() - _jobs[job_id]["started"])
         logger.info(f"[{job_id}] Done: {job_output} ({file_size} bytes, {elapsed}s)")
+
+        _generation_count += 1
 
         with _jobs_lock:
             _jobs[job_id]["status"] = "done"
@@ -270,6 +293,59 @@ async def index():
     )
 
 
+@app.get("/health")
+async def health():
+    """Health check endpoint — reports VRAM, model state, job queue, uptime."""
+    import torch
+
+    uptime = round(time.time() - _server_start_time)
+    uptime_str = f"{uptime // 3600}h {(uptime % 3600) // 60}m {uptime % 60}s"
+
+    # VRAM + GPU stats (CUDA only)
+    vram = {}
+    gpu = {}
+    if torch.cuda.is_available():
+        cap = torch.cuda.get_device_capability()
+        vram = {
+            "allocated_mb": round(torch.cuda.memory_allocated() / 1024 / 1024, 1),
+            "reserved_mb": round(torch.cuda.memory_reserved() / 1024 / 1024, 1),
+            "max_allocated_mb": round(torch.cuda.max_memory_allocated() / 1024 / 1024, 1),
+            "total_mb": round(torch.cuda.get_device_properties(0).total_memory / 1024 / 1024, 1),
+            "device": torch.cuda.get_device_name(0),
+        }
+        vram["used_pct"] = round(vram["allocated_mb"] / vram["total_mb"] * 100, 1) if vram["total_mb"] > 0 else 0
+        gpu = {
+            "compute_capability": f"{cap[0]}.{cap[1]}",
+            "supports_bf16": cap >= (8, 0),
+            "supports_fp16": cap >= (7, 0),
+            "supports_tf32": cap >= (8, 0),
+        }
+
+    # Job queue stats
+    with _jobs_lock:
+        active = sum(1 for j in _jobs.values() if j["status"] == "processing")
+        done = sum(1 for j in _jobs.values() if j["status"] == "done")
+        failed = sum(1 for j in _jobs.values() if j["status"] == "failed")
+
+    return JSONResponse({
+        "status": "healthy",
+        "uptime": uptime_str,
+        "uptime_seconds": uptime,
+        "model": {
+            "loaded": _model_loaded,
+            "type": _current_model_type,
+        },
+        "vram": vram,
+        "gpu": gpu,
+        "jobs": {
+            "active": active,
+            "done": done,
+            "failed": failed,
+        },
+        "generation_count": _generation_count,
+    })
+
+
 @app.post("/tts")
 async def tts(request: TTSRequest):
     ensure_model()
@@ -281,8 +357,8 @@ async def tts(request: TTSRequest):
 
     job_id = str(uuid.uuid4())[:8]
 
-    logger.info(f"[{job_id}] Queued: {len(request.text)} chars, exag={request.exaggeration}, "
-                f"cfg={request.cfg_weight}, temp={request.temperature}")
+    logger.info(f"[{job_id}] Queued: {len(request.text)} chars, model={request.model}, "
+                f"exag={request.exaggeration}, cfg={request.cfg_weight}, temp={request.temperature}")
 
     with _jobs_lock:
         _jobs[job_id] = {

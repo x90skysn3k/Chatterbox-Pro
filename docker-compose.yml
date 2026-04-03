@@ -1,0 +1,19 @@
+services:
+  chatterbox-extended:
+    build: .
+    ports:
+      - "8004:8004"
+    volumes:
+      - ./voices:/app/voices
+      - ./output:/app/output
+    environment:
+      - DEFAULT_VOICE=${DEFAULT_VOICE:-default.wav}
+      - CHATTERBOX_DTYPE=${CHATTERBOX_DTYPE:-auto}
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    restart: unless-stopped
