@@ -23,7 +23,8 @@ RUN python3 -m venv /app/venv
 ENV PATH="/app/venv/bin:$PATH"
 COPY requirements.txt .
 RUN pip install --no-cache-dir --upgrade pip && \
-    pip install --no-cache-dir -r requirements.txt
+    pip install --no-cache-dir -r requirements.txt && \
+    pip install --no-cache-dir --no-deps auto-editor==27.1.1
 
 # Copy application code
 COPY Chatter.py server.py test-models.py test-corpus.json ./
