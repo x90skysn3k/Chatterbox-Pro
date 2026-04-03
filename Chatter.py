@@ -655,6 +655,19 @@ def normalize_with_ffmpeg(input_wav, output_wav, method="ebu", i=-24, tp=-2, lra
                 measured_lra = measured.get("input_lra", lra)
                 measured_thresh = measured.get("input_thresh", "-70.0")
                 offset = measured.get("target_offset", "0.0")
+                # Guard against -inf values from very quiet audio
+                if any(str(v) == "-inf" for v in [measured_i, measured_tp, measured_lra, measured_thresh]):
+                    print("[WARNING] Two-pass loudnorm got -inf values, falling back to single-pass")
+                    loudnorm = f"loudnorm=I={i}:TP={tp}:LRA={lra}"
+                    (
+                        ffmpeg
+                        .input(input_wav)
+                        .output(output_wav, af=loudnorm)
+                        .overwrite_output()
+                        .run(quiet=True)
+                    )
+                    os.replace(output_wav, input_wav)
+                    return
                 # Pass 2: apply with measured values for linear normalization
                 loudnorm_pass2 = (
                     f"loudnorm=I={i}:TP={tp}:LRA={lra}"
@@ -864,6 +877,49 @@ def _apply_silero_vad_trim(wav_path, min_silence_ms=300, max_silence_ms=500, spe
 
     except Exception as e:
         print(f"[VAD] Silero VAD trim failed: {e}")
+        return False
+
+
+def _trim_trailing_silence(wav_path, threshold_db=-40, min_trailing_ms=100):
+    """
+    Trim trailing silence/noise from a WAV file using simple energy detection.
+    Used on individual chunk candidates before Whisper validation.
+    """
+    try:
+        waveform, sr = torchaudio.load(wav_path)
+        if waveform.shape[1] == 0:
+            return False
+
+        # Convert to energy in dB
+        frame_length = int(sr * 0.01)  # 10ms frames
+        min_trailing_samples = int(sr * min_trailing_ms / 1000)
+
+        # Find last frame above threshold
+        num_frames = waveform.shape[1] // frame_length
+        if num_frames < 2:
+            return False
+
+        last_speech_frame = num_frames - 1
+        for frame_idx in range(num_frames - 1, -1, -1):
+            start = frame_idx * frame_length
+            end = min(start + frame_length, waveform.shape[1])
+            frame_energy = waveform[:, start:end].abs().mean()
+            frame_db = 20 * torch.log10(frame_energy + 1e-10)
+            if frame_db > threshold_db:
+                last_speech_frame = frame_idx
+                break
+
+        # Trim after last speech frame + small padding
+        trim_point = min((last_speech_frame + 2) * frame_length, waveform.shape[1])
+        if trim_point < waveform.shape[1] - min_trailing_samples:
+            trimmed = waveform[:, :trim_point]
+            torchaudio.save(wav_path, trimmed, sr)
+            removed_ms = (waveform.shape[1] - trim_point) / sr * 1000
+            print(f"[TRIM] Removed {removed_ms:.0f}ms trailing silence from {os.path.basename(wav_path)}")
+            return True
+        return False
+    except Exception as e:
+        print(f"[TRIM] Failed: {e}")
         return False
 
 
@@ -1194,6 +1250,7 @@ def process_one_chunk_deterministic(
                             break
                         time.sleep(0.05)
 
+                    _trim_trailing_silence(candidate_path)
                     duration = get_wav_duration(candidate_path)
                     print(f"\033[32m[DEBUG] [DET] Saved cand {cand_idx+1}, attempt {attempt+1}, duration={duration:.3f}s: {candidate_path}\033[0m")
                     candidates.append({
@@ -1205,9 +1262,8 @@ def process_one_chunk_deterministic(
                         'seed': candidate_seed,
                     })
 
-                    # If bypass is ON we can short-circuit after first successful candidate
-                    if bypass_whisper_checking:
-                        break
+                    # Break after successful generation — Whisper retry logic handles re-generation if needed
+                    break
 
                 except Exception as e:
                     tb = traceback.format_exc()
