@@ -1,5 +1,5 @@
 """
-Chatterbox Extended TTS Server
+Chatterbox Pro TTS Server
 Async job queue: POST /tts returns job_id instantly, poll /status/{id}, download /result/{id}.
 Eliminates HTTP timeout issues during long generation runs.
 Progress streamed via /status — client sees chunk/candidate/whisper progress in real time.
@@ -27,8 +27,9 @@ if EXTENDED_DIR not in sys.path:
 
 os.environ["GRADIO_ANALYTICS_ENABLED"] = "False"
 
-from fastapi import FastAPI
-from fastapi.responses import Response, HTMLResponse, JSONResponse
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi.responses import Response, HTMLResponse, JSONResponse, FileResponse
+import json as _json
 from pydantic import BaseModel
 
 from logging.handlers import RotatingFileHandler
@@ -51,9 +52,9 @@ _version_path = os.path.join(EXTENDED_DIR, "VERSION")
 if os.path.exists(_version_path):
     with open(_version_path) as f:
         _VERSION = f.read().strip()
-logger.info(f"Chatterbox Extended TTS Server v{_VERSION}")
+logger.info(f"Chatterbox Pro TTS Server v{_VERSION}")
 
-app = FastAPI(title="Chatterbox Extended TTS Server")
+app = FastAPI(title="Chatterbox Pro TTS Server")
 
 VOICES_DIR = os.path.join(EXTENDED_DIR, "voices")
 os.makedirs(VOICES_DIR, exist_ok=True)
@@ -173,6 +174,38 @@ def ensure_model():
         get_or_load_model()
         _model_loaded = True
         logger.info(f"Model loaded! (server v{_VERSION})")
+
+
+_turbo_model = None
+_turbo_lock = threading.Lock()
+
+def _get_turbo_model():
+    """Load Chatterbox Turbo model (350M, 1-step decoder) for streaming."""
+    global _turbo_model
+    if _turbo_model is None:
+        with _turbo_lock:
+            if _turbo_model is None:
+                logger.info("Loading Chatterbox Turbo model...")
+                try:
+                    from chatterbox.src.chatterbox.tts import ChatterboxTTS, REPO_ID
+                    import chatterbox.src.chatterbox.tts as _tts_module
+                    # Temporarily override REPO_ID to load turbo variant
+                    _orig_repo_id = _tts_module.REPO_ID
+                    _tts_module.REPO_ID = "ResembleAI/chatterbox-turbo"
+                    try:
+                        device = "cuda" if __import__('torch').cuda.is_available() else "cpu"
+                        _turbo_model = ChatterboxTTS.from_pretrained(device=device)
+                    finally:
+                        _tts_module.REPO_ID = _orig_repo_id
+                    if hasattr(_turbo_model, "eval"):
+                        _turbo_model.eval()
+                    logger.info("Turbo model loaded!")
+                except Exception as e:
+                    logger.error(f"Failed to load Turbo model: {e}")
+                    logger.info("Falling back to standard model for streaming")
+                    from Chatter import get_or_load_model
+                    _turbo_model = get_or_load_model()
+    return _turbo_model
 
 
 class TTSRequest(BaseModel):
@@ -345,7 +378,7 @@ async def index():
         done = sum(1 for j in _jobs.values() if j["status"] == "done")
     return (
         "<html><body>"
-        f"<h1>Chatterbox Extended TTS Server v{_VERSION}</h1>"
+        f"<h1>Chatterbox Pro TTS Server v{_VERSION}</h1>"
         f"<p>Active jobs: {active} | Completed: {done}</p>"
         "<p>POST /tts → returns job_id | GET /status/ID | GET /result/ID</p>"
         "</body></html>"
@@ -525,6 +558,143 @@ async def result(job_id: str):
         headers["X-Audio-Normalized"] = "ebu"
         headers["X-Audio-Loudnorm"] = "I=-16:TP=-1.5:LRA=11"
     return Response(content=audio_bytes, media_type="audio/wav", headers=headers)
+
+
+@app.websocket("/stream")
+async def stream_tts(websocket: WebSocket):
+    """WebSocket streaming TTS: sends audio chunks as they generate."""
+    await websocket.accept()
+
+    try:
+        # Receive request
+        data = await websocket.receive_text()
+        request = _json.loads(data)
+        text = request.get("text", "")
+        voice = request.get("voice", os.environ.get("DEFAULT_VOICE", "default.wav"))
+
+        if not text.strip():
+            await websocket.send_json({"error": "No text provided"})
+            await websocket.close()
+            return
+
+        voice_path = os.path.join(VOICES_DIR, voice)
+        if not os.path.exists(voice_path):
+            await websocket.send_json({"error": f"Voice not found: {voice}"})
+            await websocket.close()
+            return
+
+        logger.info(f"[STREAM] Starting: {len(text)} chars, voice={voice}")
+        await websocket.send_json({"status": "generating", "text_length": len(text)})
+
+        import torch
+        import torchaudio
+        import io
+        from nltk.tokenize import sent_tokenize
+
+        # Load model (Turbo preferred, falls back to standard)
+        model = _get_turbo_model()
+
+        # Split into small chunks for progressive streaming
+        sentences = sent_tokenize(text)
+        # Merge very short sentences
+        chunks = []
+        current = ""
+        for s in sentences:
+            if len(current) + len(s) + 1 < 200:
+                current = (current + " " + s).strip() if current else s
+            else:
+                if current:
+                    chunks.append(current)
+                current = s
+        if current:
+            chunks.append(current)
+
+        if not chunks:
+            chunks = [text]
+
+        await websocket.send_json({"status": "chunks", "count": len(chunks)})
+
+        start_time = time.time()
+        sample_rate = getattr(model, 'sr', 24000)
+
+        for i, chunk in enumerate(chunks):
+            if not chunk.strip():
+                continue
+
+            chunk_start = time.time()
+            try:
+                # Generate with minimal params for speed
+                with torch.inference_mode():
+                    wav = model.generate(
+                        chunk,
+                        audio_prompt_path=voice_path,
+                        temperature=0.8,
+                        apply_watermark=False,
+                    )
+
+                # Convert to PCM16 bytes
+                if wav.dim() == 1:
+                    wav = wav.unsqueeze(0)
+
+                # Resample to 24kHz if needed
+                if sample_rate != 24000:
+                    wav = torchaudio.functional.resample(wav, sample_rate, 24000)
+
+                # Convert to 16-bit PCM bytes
+                pcm = (wav.squeeze().clamp(-1, 1) * 32767).to(torch.int16).cpu().numpy().tobytes()
+
+                chunk_time = round(time.time() - chunk_start, 2)
+
+                # Send metadata then audio
+                await websocket.send_json({
+                    "status": "chunk",
+                    "index": i,
+                    "total": len(chunks),
+                    "text": chunk[:80],
+                    "duration_ms": len(pcm) // 2 * 1000 // 24000,
+                    "gen_time": chunk_time,
+                })
+                await websocket.send_bytes(pcm)
+
+                logger.info(f"[STREAM] Chunk {i+1}/{len(chunks)}: {chunk_time}s, {len(pcm)} bytes")
+
+            except Exception as e:
+                logger.error(f"[STREAM] Chunk {i} failed: {e}")
+                await websocket.send_json({"error": f"Chunk {i} failed: {str(e)}"})
+
+        elapsed = round(time.time() - start_time, 2)
+        await websocket.send_json({"status": "done", "chunks": len(chunks), "elapsed": elapsed})
+        logger.info(f"[STREAM] Done: {len(chunks)} chunks in {elapsed}s")
+
+    except WebSocketDisconnect:
+        logger.info("[STREAM] Client disconnected")
+    except Exception as e:
+        logger.error(f"[STREAM] Error: {e}")
+        try:
+            await websocket.send_json({"error": str(e)})
+        except:
+            pass
+    finally:
+        try:
+            await websocket.close()
+        except:
+            pass
+
+
+@app.get("/stream-test")
+async def stream_test():
+    """Serve the streaming TTS test page."""
+    html_path = os.path.join(EXTENDED_DIR, "stream.html")
+    if os.path.exists(html_path):
+        return FileResponse(html_path, media_type="text/html")
+    return HTMLResponse("<html><body><h1>stream.html not found</h1></body></html>")
+
+
+@app.get("/voices")
+async def list_voices():
+    """List available voice files."""
+    voices = [f for f in os.listdir(VOICES_DIR) if f.endswith(('.wav', '.mp3', '.flac'))]
+    return JSONResponse({"voices": sorted(voices)})
 
 
 if __name__ == "__main__":

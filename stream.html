@@ -1,0 +1,916 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Chatterbox Stream — Real-Time TTS</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --bg-primary: #0a0e14;
+    --bg-secondary: #111820;
+    --bg-tertiary: #161e28;
+    --bg-card: #131a24;
+    --cyan: #00e5ff;
+    --cyan-dim: #00e5ff88;
+    --cyan-glow: #00e5ff40;
+    --cyan-faint: #00e5ff18;
+    --red: #ff3860;
+    --red-dim: #ff386088;
+    --green: #00e676;
+    --yellow: #ffd740;
+    --text-primary: #e0e6ed;
+    --text-secondary: #8899aa;
+    --text-muted: #556677;
+    --mono: 'SF Mono', 'Cascadia Code', 'Fira Code', 'JetBrains Mono', 'Consolas', monospace;
+    --sans: -apple-system, BlinkMacSystemFont, 'Inter', 'Segoe UI', sans-serif;
+    --border: #1e2a38;
+    --border-active: #00e5ff44;
+  }
+
+  body {
+    background: var(--bg-primary);
+    color: var(--text-primary);
+    font-family: var(--sans);
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 24px;
+    line-height: 1.5;
+  }
+
+  /* Subtle grid background */
+  body::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    background:
+      linear-gradient(rgba(0,229,255,0.015) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(0,229,255,0.015) 1px, transparent 1px);
+    background-size: 40px 40px;
+    pointer-events: none;
+    z-index: 0;
+  }
+
+  .container {
+    position: relative;
+    z-index: 1;
+    width: 100%;
+    max-width: 720px;
+  }
+
+  /* Header */
+  .header {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    margin-bottom: 28px;
+    padding-bottom: 16px;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .header-icon {
+    width: 36px;
+    height: 36px;
+    border-radius: 8px;
+    background: linear-gradient(135deg, var(--cyan-faint), var(--bg-tertiary));
+    border: 1px solid var(--border-active);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+  }
+
+  .header-icon svg {
+    width: 18px;
+    height: 18px;
+    fill: var(--cyan);
+  }
+
+  .header h1 {
+    font-size: 18px;
+    font-weight: 600;
+    color: var(--text-primary);
+    letter-spacing: -0.3px;
+  }
+
+  .header h1 span {
+    color: var(--cyan);
+  }
+
+  .header .version {
+    margin-left: auto;
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--text-muted);
+    background: var(--bg-tertiary);
+    padding: 3px 8px;
+    border-radius: 4px;
+    border: 1px solid var(--border);
+  }
+
+  /* Form Controls */
+  .control-group {
+    margin-bottom: 16px;
+  }
+
+  .control-group label {
+    display: block;
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.8px;
+    color: var(--text-secondary);
+    margin-bottom: 6px;
+  }
+
+  textarea {
+    width: 100%;
+    min-height: 120px;
+    max-height: 400px;
+    resize: vertical;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 14px;
+    color: var(--text-primary);
+    font-family: var(--mono);
+    font-size: 14px;
+    line-height: 1.6;
+    transition: border-color 0.2s, box-shadow 0.2s;
+    outline: none;
+  }
+
+  textarea:focus {
+    border-color: var(--cyan-dim);
+    box-shadow: 0 0 0 3px var(--cyan-glow);
+  }
+
+  textarea::placeholder {
+    color: var(--text-muted);
+  }
+
+  .row {
+    display: flex;
+    gap: 12px;
+    align-items: flex-end;
+  }
+
+  .row .control-group {
+    flex: 1;
+  }
+
+  select {
+    width: 100%;
+    height: 42px;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 0 12px;
+    color: var(--text-primary);
+    font-family: var(--mono);
+    font-size: 13px;
+    outline: none;
+    cursor: pointer;
+    appearance: none;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath d='M3 4.5L6 8 9 4.5' fill='none' stroke='%238899aa' stroke-width='1.5' stroke-linecap='round'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right 12px center;
+    transition: border-color 0.2s;
+  }
+
+  select:focus {
+    border-color: var(--cyan-dim);
+  }
+
+  .btn-row {
+    display: flex;
+    gap: 10px;
+    margin-top: 4px;
+  }
+
+  button {
+    height: 42px;
+    padding: 0 22px;
+    border-radius: 8px;
+    font-family: var(--sans);
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    border: none;
+    transition: all 0.15s;
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    white-space: nowrap;
+  }
+
+  .btn-primary {
+    background: var(--cyan);
+    color: var(--bg-primary);
+  }
+
+  .btn-primary:hover:not(:disabled) {
+    background: #33eaff;
+    box-shadow: 0 0 20px var(--cyan-glow);
+  }
+
+  .btn-primary:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+  }
+
+  .btn-danger {
+    background: transparent;
+    color: var(--red);
+    border: 1px solid var(--red-dim);
+  }
+
+  .btn-danger:hover:not(:disabled) {
+    background: rgba(255, 56, 96, 0.1);
+  }
+
+  .btn-danger:disabled {
+    opacity: 0.3;
+    cursor: not-allowed;
+  }
+
+  /* Stats Panel */
+  .stats-panel {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 1px;
+    background: var(--border);
+    border-radius: 8px;
+    overflow: hidden;
+    margin-top: 20px;
+  }
+
+  .stat-item {
+    background: var(--bg-card);
+    padding: 14px 16px;
+    text-align: center;
+  }
+
+  .stat-item .stat-label {
+    font-size: 10px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.8px;
+    color: var(--text-muted);
+    margin-bottom: 4px;
+  }
+
+  .stat-item .stat-value {
+    font-family: var(--mono);
+    font-size: 18px;
+    font-weight: 700;
+    color: var(--text-secondary);
+  }
+
+  .stat-item .stat-value.active {
+    color: var(--cyan);
+  }
+
+  .stat-item .stat-value.done {
+    color: var(--green);
+  }
+
+  /* Waveform / Level Meter */
+  .visualizer-container {
+    margin-top: 20px;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    overflow: hidden;
+    position: relative;
+  }
+
+  .visualizer-container canvas {
+    display: block;
+    width: 100%;
+    height: 80px;
+  }
+
+  .visualizer-label {
+    position: absolute;
+    top: 8px;
+    left: 12px;
+    font-size: 10px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.8px;
+    color: var(--text-muted);
+    pointer-events: none;
+  }
+
+  /* Status Log */
+  .log-container {
+    margin-top: 20px;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    overflow: hidden;
+  }
+
+  .log-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 10px 14px;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .log-header span {
+    font-size: 10px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.8px;
+    color: var(--text-muted);
+  }
+
+  .log-dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--text-muted);
+    transition: background 0.3s;
+  }
+
+  .log-dot.connected { background: var(--green); box-shadow: 0 0 6px rgba(0,230,118,0.5); }
+  .log-dot.active { background: var(--cyan); box-shadow: 0 0 6px var(--cyan-glow); animation: pulse-dot 1.2s ease-in-out infinite; }
+  .log-dot.error { background: var(--red); box-shadow: 0 0 6px rgba(255,56,96,0.5); }
+
+  @keyframes pulse-dot {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.5; }
+  }
+
+  .log-body {
+    padding: 10px 14px;
+    max-height: 200px;
+    overflow-y: auto;
+    font-family: var(--mono);
+    font-size: 12px;
+    line-height: 1.8;
+  }
+
+  .log-body::-webkit-scrollbar { width: 6px; }
+  .log-body::-webkit-scrollbar-track { background: transparent; }
+  .log-body::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+
+  .log-entry {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+  }
+
+  .log-time {
+    color: var(--text-muted);
+    flex-shrink: 0;
+  }
+
+  .log-msg { color: var(--text-secondary); }
+  .log-msg.info { color: var(--cyan); }
+  .log-msg.success { color: var(--green); }
+  .log-msg.error { color: var(--red); }
+  .log-msg.warn { color: var(--yellow); }
+
+  /* Error Banner */
+  .error-banner {
+    display: none;
+    margin-top: 16px;
+    padding: 12px 16px;
+    background: rgba(255, 56, 96, 0.08);
+    border: 1px solid var(--red-dim);
+    border-radius: 8px;
+    font-family: var(--mono);
+    font-size: 12px;
+    color: var(--red);
+    line-height: 1.6;
+    word-break: break-word;
+  }
+
+  .error-banner.visible { display: block; }
+
+  /* Responsive */
+  @media (max-width: 600px) {
+    body { padding: 16px; }
+    .row { flex-direction: column; }
+    .stats-panel { grid-template-columns: 1fr; }
+    .header h1 { font-size: 15px; }
+  }
+</style>
+</head>
+<body>
+
+<div class="container">
+  <!-- Header -->
+  <div class="header">
+    <div class="header-icon">
+      <svg viewBox="0 0 24 24"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3zM19 10v2a7 7 0 0 1-14 0v-2H3v2a9 9 0 0 0 8 8.94V23h2v-2.06A9 9 0 0 0 21 12v-2h-2z"/></svg>
+    </div>
+    <h1>Chatterbox <span>Stream</span></h1>
+    <div class="version">WebSocket TTS</div>
+  </div>
+
+  <!-- Text Input -->
+  <div class="control-group">
+    <label>Text to Speak</label>
+    <textarea id="textInput" placeholder="Enter text to synthesize... Multi-sentence supported." spellcheck="false">The market doesn't care about your feelings. Every trade you take is a bet against someone who thinks you're wrong. That's the game.</textarea>
+  </div>
+
+  <!-- Voice + Buttons -->
+  <div class="row">
+    <div class="control-group">
+      <label>Voice</label>
+      <select id="voiceSelect">
+        <option value="default.wav">default.wav</option>
+      </select>
+    </div>
+    <div class="btn-row" style="margin-bottom: 16px;">
+      <button class="btn-primary" id="btnSpeak" onclick="startStream()">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><polygon points="5,3 19,12 5,21"/></svg>
+        Speak
+      </button>
+      <button class="btn-danger" id="btnStop" onclick="stopStream()" disabled>
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><rect x="4" y="4" width="16" height="16" rx="2"/></svg>
+        Stop
+      </button>
+    </div>
+  </div>
+
+  <!-- Stats -->
+  <div class="stats-panel">
+    <div class="stat-item">
+      <div class="stat-label">First Audio</div>
+      <div class="stat-value" id="statLatency">--</div>
+    </div>
+    <div class="stat-item">
+      <div class="stat-label">Chunks</div>
+      <div class="stat-value" id="statChunks">--</div>
+    </div>
+    <div class="stat-item">
+      <div class="stat-label">Total Time</div>
+      <div class="stat-value" id="statTotal">--</div>
+    </div>
+  </div>
+
+  <!-- Waveform Visualizer -->
+  <div class="visualizer-container">
+    <div class="visualizer-label">Waveform</div>
+    <canvas id="waveformCanvas"></canvas>
+  </div>
+
+  <!-- Status Log -->
+  <div class="log-container">
+    <div class="log-header">
+      <span>Event Log</span>
+      <div class="log-dot" id="logDot"></div>
+    </div>
+    <div class="log-body" id="logBody"></div>
+  </div>
+
+  <!-- Error Banner -->
+  <div class="error-banner" id="errorBanner"></div>
+</div>
+
+<script>
+// ── State ────────────────────────────────────────────────────────────
+let ws = null;
+let audioCtx = null;
+let analyserNode = null;
+let nextPlayTime = 0;
+let startTime = 0;
+let firstChunkTime = 0;
+let chunkCount = 0;
+let totalChunks = 0;
+let isStreaming = false;
+let lastSourceNode = null;
+let animFrameId = null;
+let scheduledSources = [];
+
+// ── DOM Refs ─────────────────────────────────────────────────────────
+const textInput = document.getElementById('textInput');
+const voiceSelect = document.getElementById('voiceSelect');
+const btnSpeak = document.getElementById('btnSpeak');
+const btnStop = document.getElementById('btnStop');
+const statLatency = document.getElementById('statLatency');
+const statChunks = document.getElementById('statChunks');
+const statTotal = document.getElementById('statTotal');
+const logBody = document.getElementById('logBody');
+const logDot = document.getElementById('logDot');
+const errorBanner = document.getElementById('errorBanner');
+const canvas = document.getElementById('waveformCanvas');
+const canvasCtx = canvas.getContext('2d');
+
+// ── Initialization ───────────────────────────────────────────────────
+(async function init() {
+  await loadVoices();
+  resizeCanvas();
+  window.addEventListener('resize', resizeCanvas);
+  log('Ready. Enter text and click Speak.', 'info');
+})();
+
+async function loadVoices() {
+  try {
+    const resp = await fetch('/voices');
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    const data = await resp.json();
+    voiceSelect.innerHTML = '';
+    const voices = Array.isArray(data) ? data : (data.voices || []);
+    if (voices.length === 0) {
+      voiceSelect.innerHTML = '<option value="default.wav">default.wav</option>';
+      log('No voices from /voices endpoint, using default', 'warn');
+      return;
+    }
+    voices.forEach(v => {
+      const name = typeof v === 'string' ? v : (v.name || v.filename || v);
+      const opt = document.createElement('option');
+      opt.value = name;
+      opt.textContent = name;
+      voiceSelect.appendChild(opt);
+    });
+    log(`Loaded ${voices.length} voice(s)`, 'success');
+  } catch (e) {
+    voiceSelect.innerHTML = '<option value="default.wav">default.wav</option>';
+    log(`Could not load voices: ${e.message}`, 'warn');
+  }
+}
+
+// ── Canvas ───────────────────────────────────────────────────────────
+function resizeCanvas() {
+  const rect = canvas.parentElement.getBoundingClientRect();
+  canvas.width = rect.width * window.devicePixelRatio;
+  canvas.height = 80 * window.devicePixelRatio;
+  canvasCtx.scale(window.devicePixelRatio, window.devicePixelRatio);
+  drawIdleWaveform();
+}
+
+function drawIdleWaveform() {
+  const w = canvas.width / window.devicePixelRatio;
+  const h = 80;
+  canvasCtx.clearRect(0, 0, w, h);
+  canvasCtx.strokeStyle = '#1e2a38';
+  canvasCtx.lineWidth = 1;
+  canvasCtx.beginPath();
+  canvasCtx.moveTo(0, h / 2);
+  canvasCtx.lineTo(w, h / 2);
+  canvasCtx.stroke();
+}
+
+function drawWaveform() {
+  if (!analyserNode) return;
+  const w = canvas.width / window.devicePixelRatio;
+  const h = 80;
+  const bufLen = analyserNode.frequencyBinCount;
+  const data = new Uint8Array(bufLen);
+  analyserNode.getByteTimeDomainData(data);
+
+  canvasCtx.clearRect(0, 0, w, h);
+
+  // Background center line
+  canvasCtx.strokeStyle = '#1e2a3840';
+  canvasCtx.lineWidth = 1;
+  canvasCtx.beginPath();
+  canvasCtx.moveTo(0, h / 2);
+  canvasCtx.lineTo(w, h / 2);
+  canvasCtx.stroke();
+
+  // Waveform
+  canvasCtx.strokeStyle = '#00e5ff';
+  canvasCtx.lineWidth = 1.5;
+  canvasCtx.shadowColor = '#00e5ff';
+  canvasCtx.shadowBlur = 4;
+  canvasCtx.beginPath();
+
+  const sliceWidth = w / bufLen;
+  let x = 0;
+  for (let i = 0; i < bufLen; i++) {
+    const v = data[i] / 128.0;
+    const y = (v * h) / 2;
+    if (i === 0) canvasCtx.moveTo(x, y);
+    else canvasCtx.lineTo(x, y);
+    x += sliceWidth;
+  }
+  canvasCtx.lineTo(w, h / 2);
+  canvasCtx.stroke();
+  canvasCtx.shadowBlur = 0;
+
+  // Glow fill under the curve
+  canvasCtx.globalAlpha = 0.06;
+  canvasCtx.fillStyle = '#00e5ff';
+  canvasCtx.lineTo(w, h);
+  canvasCtx.lineTo(0, h);
+  canvasCtx.closePath();
+  canvasCtx.fill();
+  canvasCtx.globalAlpha = 1;
+
+  animFrameId = requestAnimationFrame(drawWaveform);
+}
+
+// ── Logging ──────────────────────────────────────────────────────────
+function log(msg, type = '') {
+  const now = new Date();
+  const ts = now.toTimeString().slice(0, 8);
+  const entry = document.createElement('div');
+  entry.className = 'log-entry';
+  entry.innerHTML = `<span class="log-time">${ts}</span><span class="log-msg ${type}">${escapeHtml(msg)}</span>`;
+  logBody.appendChild(entry);
+  logBody.scrollTop = logBody.scrollHeight;
+}
+
+function escapeHtml(str) {
+  const d = document.createElement('div');
+  d.textContent = str;
+  return d.innerHTML;
+}
+
+function showError(msg) {
+  errorBanner.textContent = msg;
+  errorBanner.classList.add('visible');
+}
+
+function clearError() {
+  errorBanner.textContent = '';
+  errorBanner.classList.remove('visible');
+}
+
+function setDot(state) {
+  logDot.className = 'log-dot ' + state;
+}
+
+// ── Stats ────────────────────────────────────────────────────────────
+function resetStats() {
+  statLatency.textContent = '--';
+  statLatency.className = 'stat-value';
+  statChunks.textContent = '--';
+  statChunks.className = 'stat-value';
+  statTotal.textContent = '--';
+  statTotal.className = 'stat-value';
+  chunkCount = 0;
+  totalChunks = 0;
+  firstChunkTime = 0;
+}
+
+function formatMs(ms) {
+  if (ms < 1000) return ms + 'ms';
+  return (ms / 1000).toFixed(1) + 's';
+}
+
+// ── Stream Control ───────────────────────────────────────────────────
+function startStream() {
+  const text = textInput.value.trim();
+  if (!text) { log('No text entered', 'warn'); return; }
+
+  clearError();
+  resetStats();
+  stopPlayback();
+
+  // Create or resume AudioContext (needs user gesture)
+  if (!audioCtx || audioCtx.state === 'closed') {
+    audioCtx = new AudioContext({ sampleRate: 24000 });
+  }
+  if (audioCtx.state === 'suspended') {
+    audioCtx.resume();
+  }
+
+  // Create analyser for waveform
+  analyserNode = audioCtx.createAnalyser();
+  analyserNode.fftSize = 2048;
+  analyserNode.smoothingTimeConstant = 0.8;
+  analyserNode.connect(audioCtx.destination);
+
+  nextPlayTime = 0;
+  isStreaming = true;
+  startTime = performance.now();
+
+  btnSpeak.disabled = true;
+  btnStop.disabled = false;
+  setDot('active');
+  log('Connecting WebSocket...', 'info');
+
+  const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+  const wsUrl = `${proto}//${window.location.host}/stream`;
+
+  try {
+    ws = new WebSocket(wsUrl);
+    ws.binaryType = 'arraybuffer';
+  } catch (e) {
+    log(`WebSocket creation failed: ${e.message}`, 'error');
+    showError(`Failed to create WebSocket: ${e.message}`);
+    endSession();
+    return;
+  }
+
+  ws.onopen = () => {
+    log('Connected', 'success');
+    setDot('connected');
+    log('Sending text for synthesis...', 'info');
+
+    const payload = JSON.stringify({
+      text: text,
+      voice: voiceSelect.value,
+    });
+    ws.send(payload);
+    statTotal.textContent = '...';
+    statTotal.className = 'stat-value active';
+  };
+
+  ws.onmessage = (evt) => {
+    if (typeof evt.data === 'string') {
+      // JSON status/metadata
+      try {
+        const msg = JSON.parse(evt.data);
+        handleStatusMessage(msg);
+      } catch {
+        log(`Server: ${evt.data}`, 'info');
+      }
+    } else {
+      // Binary PCM16 audio
+      handleAudioChunk(evt.data);
+    }
+  };
+
+  ws.onerror = (evt) => {
+    log('WebSocket error', 'error');
+    showError('WebSocket connection error. Is the /stream endpoint running?');
+    setDot('error');
+  };
+
+  ws.onclose = (evt) => {
+    const reason = evt.reason || `code ${evt.code}`;
+    log(`WebSocket closed (${reason})`, evt.wasClean ? '' : 'warn');
+    if (isStreaming) {
+      endSession();
+    }
+  };
+}
+
+function handleStatusMessage(msg) {
+  if (msg.status) {
+    log(`Status: ${msg.status}`, 'info');
+  }
+  if (msg.error) {
+    log(`Error: ${msg.error}`, 'error');
+    showError(msg.error);
+    setDot('error');
+  }
+  if (msg.total_chunks !== undefined) {
+    totalChunks = msg.total_chunks;
+  }
+  if (msg.chunk !== undefined) {
+    log(`Generating chunk ${msg.chunk}/${totalChunks || '?'}`, 'info');
+  }
+  if (msg.done) {
+    log('Server finished sending audio', 'success');
+  }
+}
+
+function handleAudioChunk(arrayBuffer) {
+  chunkCount++;
+  const now = performance.now();
+
+  // Time to first audio
+  if (chunkCount === 1) {
+    firstChunkTime = now - startTime;
+    statLatency.textContent = formatMs(Math.round(firstChunkTime));
+    statLatency.className = 'stat-value active';
+    log(`First audio received in ${formatMs(Math.round(firstChunkTime))}`, 'success');
+
+    // Start waveform visualization
+    if (animFrameId) cancelAnimationFrame(animFrameId);
+    animFrameId = requestAnimationFrame(drawWaveform);
+  }
+
+  // Update chunk counter
+  const label = totalChunks > 0 ? `${chunkCount}/${totalChunks}` : `${chunkCount}`;
+  statChunks.textContent = label;
+  statChunks.className = 'stat-value active';
+
+  // Play the PCM16 chunk
+  playPCM16(arrayBuffer);
+
+  // Update total elapsed
+  const elapsed = now - startTime;
+  statTotal.textContent = formatMs(Math.round(elapsed));
+}
+
+function playPCM16(arrayBuffer) {
+  if (!audioCtx || !isStreaming) return;
+
+  const int16 = new Int16Array(arrayBuffer);
+  const float32 = new Float32Array(int16.length);
+  for (let i = 0; i < int16.length; i++) {
+    float32[i] = int16[i] / 32768;
+  }
+
+  const buffer = audioCtx.createBuffer(1, float32.length, 24000);
+  buffer.getChannelData(0).set(float32);
+
+  const source = audioCtx.createBufferSource();
+  source.buffer = buffer;
+  source.connect(analyserNode); // Route through analyser for visualization
+
+  // Schedule playback: each chunk plays after the previous one
+  if (nextPlayTime === 0 || nextPlayTime < audioCtx.currentTime) {
+    nextPlayTime = audioCtx.currentTime + 0.01; // tiny offset to avoid click
+  }
+
+  source.start(nextPlayTime);
+  nextPlayTime += buffer.duration;
+  scheduledSources.push(source);
+
+  // Track final source for endSession timing
+  source.onended = () => {
+    const idx = scheduledSources.indexOf(source);
+    if (idx !== -1) scheduledSources.splice(idx, 1);
+
+    // If this was the last chunk and no more sources are scheduled
+    if (scheduledSources.length === 0 && !ws) {
+      finishPlayback();
+    }
+  };
+}
+
+function stopStream() {
+  log('Stopping...', 'warn');
+
+  // Close WebSocket
+  if (ws) {
+    ws.close(1000, 'User stopped');
+    ws = null;
+  }
+
+  stopPlayback();
+  endSession();
+}
+
+function stopPlayback() {
+  // Stop all scheduled audio sources
+  scheduledSources.forEach(src => {
+    try { src.stop(); } catch {}
+  });
+  scheduledSources = [];
+
+  if (animFrameId) {
+    cancelAnimationFrame(animFrameId);
+    animFrameId = null;
+  }
+  drawIdleWaveform();
+}
+
+function endSession() {
+  isStreaming = false;
+  ws = null;
+  btnSpeak.disabled = false;
+  btnStop.disabled = true;
+
+  if (chunkCount > 0) {
+    const total = performance.now() - startTime;
+    statTotal.textContent = formatMs(Math.round(total));
+    statTotal.className = 'stat-value done';
+    statChunks.className = 'stat-value done';
+    statLatency.className = 'stat-value done';
+    setDot('connected');
+  } else {
+    setDot('');
+  }
+}
+
+function finishPlayback() {
+  if (animFrameId) {
+    cancelAnimationFrame(animFrameId);
+    animFrameId = null;
+  }
+
+  // Keep waveform visible briefly then fade to idle
+  setTimeout(() => {
+    drawIdleWaveform();
+  }, 300);
+
+  const total = performance.now() - startTime;
+  statTotal.textContent = formatMs(Math.round(total));
+  statTotal.className = 'stat-value done';
+  statChunks.className = 'stat-value done';
+  statLatency.className = 'stat-value done';
+  log(`Playback complete. Total: ${formatMs(Math.round(total))}`, 'success');
+  setDot('connected');
+  btnSpeak.disabled = false;
+  btnStop.disabled = true;
+  isStreaming = false;
+}
+
+// ── Keyboard Shortcut ────────────────────────────────────────────────
+textInput.addEventListener('keydown', (e) => {
+  if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+    e.preventDefault();
+    if (!btnSpeak.disabled) startStream();
+  }
+});
+</script>
+
+</body>
+</html>
