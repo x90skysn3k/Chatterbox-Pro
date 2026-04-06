@@ -187,7 +187,7 @@ def _get_turbo_model():
             if _turbo_model is None:
                 logger.info("Loading Chatterbox Turbo model...")
                 try:
-                    from chatterbox.src.chatterbox.tts import ChatterboxTTS
+                    from chatterbox.tts import ChatterboxTTS
                     device = "cuda" if __import__('torch').cuda.is_available() else "cpu"
                     _turbo_model = ChatterboxTTS.from_pretrained_turbo(device=device)
                     if hasattr(_turbo_model, "eval"):

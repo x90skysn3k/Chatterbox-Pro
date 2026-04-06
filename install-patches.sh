@@ -10,8 +10,8 @@ set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
-# Find pip-installed chatterbox package
-SITE_PACKAGES=$(python3 -c "import chatterbox; import os; print(os.path.dirname(chatterbox.__file__))" 2>/dev/null)
+# Find pip-installed chatterbox package (without importing torch — saves ~2GB RAM during build)
+SITE_PACKAGES=$(python3 -c "import importlib.util; spec = importlib.util.find_spec('chatterbox'); print(spec.submodule_search_locations[0] if spec else '')" 2>/dev/null)
 
 if [ -z "$SITE_PACKAGES" ] || [ ! -d "$SITE_PACKAGES" ]; then
     echo "[patches] ERROR: chatterbox package not found. Install with: pip install chatterbox-tts"

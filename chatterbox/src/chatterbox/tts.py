@@ -72,7 +72,10 @@ class ChatterboxTTS:
         self.tokenizer = tokenizer
         self.device = device
         self.conds = conds
-        self.watermarker = perth.PerthImplicitWatermarker()
+        if perth.PerthImplicitWatermarker is not None:
+            self.watermarker = perth.PerthImplicitWatermarker()
+        else:
+            self.watermarker = None
         self.default_conds = conds
 
     @classmethod
@@ -296,7 +299,7 @@ class ChatterboxTTS:
             )
             wav_np = wav.squeeze(0).detach().cpu().numpy()
             del wav, speech_tokens
-            if apply_watermark and hasattr(self, "watermarker"):
+            if apply_watermark and getattr(self, "watermarker", None) is not None:
                 with _WATERMARK_LOCK:
                     wav_np = self.watermarker.apply_watermark(wav_np, sample_rate=self.sr)
 
@@ -400,7 +403,7 @@ class ChatterboxTTS:
                     ref_dict=conds_batch[b].gen,
                 )
                 wav_np = wav.squeeze(0).detach().cpu().numpy()
-                if apply_watermark and hasattr(self, "watermarker"):
+                if apply_watermark and getattr(self, "watermarker", None) is not None:
                     with _WATERMARK_LOCK:
                         wav_np = self.watermarker.apply_watermark(wav_np, sample_rate=self.sr)
                 out_wavs.append(torch.from_numpy(wav_np).unsqueeze(0))
