@@ -1,5 +1,14 @@
 # Changelog
 
+## [1.2.3] - 2026-04-09
+
+### Added
+- **Concurrent job support**: Server now allows 2 parallel TTS jobs via `threading.Semaphore` (was single-job mutex). P40 has 24GB VRAM, ~6GB per job — fits 2 safely, 3 possible.
+- **Job-isolated temp directories**: Each job writes candidates to `temp/{job_id}/` instead of flat `temp/`. Prevents concurrent jobs from deleting each other's temp files. Cleaned up automatically after generation completes.
+
+### Fixed
+- **Race condition in temp/ cleanup**: `process_text_for_tts()` previously wiped all of `temp/` at job start, which would destroy in-progress files from concurrent jobs.
+
 ## [Unreleased] - 2026-04-03
 
 ### Added

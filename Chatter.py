@@ -3,6 +3,7 @@ import numpy as np
 import torch
 import os
 import re
+import shutil
 import datetime
 import torchaudio
 import gradio as gr
@@ -1181,6 +1182,7 @@ def process_one_chunk(
     bypass_whisper_checking,
     retry_attempt_number=1,
     top_p=0.8, repetition_penalty=2.0,
+    temp_dir="temp",
 ):
     candidates = []
     try:
@@ -1210,7 +1212,7 @@ def process_one_chunk(
                     )
                     
 
-                    candidate_path = f"temp/gen{gen_index+1}_chunk_{idx:03d}_cand_{cand_idx+1}_try{retry_attempt_number}_seed{candidate_seed}.wav"
+                    candidate_path = f"{temp_dir}/gen{gen_index+1}_chunk_{idx:03d}_cand_{cand_idx+1}_try{retry_attempt_number}_seed{candidate_seed}.wav"
                     torchaudio.save(candidate_path, wav, model.sr)
                     for _ in range(10):
                         if os.path.exists(candidate_path) and os.path.getsize(candidate_path) > 1024:
@@ -1240,6 +1242,7 @@ def process_one_chunk_deterministic(
     bypass_whisper_checking,
     retry_attempt_number=1,
     top_p=0.8, repetition_penalty=2.0,
+    temp_dir="temp",
 ):
     """
     Deterministic per-chunk generation that does NOT mutate global RNG.
@@ -1311,7 +1314,7 @@ def process_one_chunk_deterministic(
                                 apply_watermark=not disable_watermark,
                             )
 
-                    candidate_path = f"temp/gen{gen_index+1}_chunk_{idx:03d}_cand_{cand_idx+1}_try{retry_attempt_number}_seed{candidate_seed}.wav"
+                    candidate_path = f"{temp_dir}/gen{gen_index+1}_chunk_{idx:03d}_cand_{cand_idx+1}_try{retry_attempt_number}_seed{candidate_seed}.wav"
                     torchaudio.save(candidate_path, wav, model.sr)
 
                     # Wait briefly for filesystem consistency
@@ -1535,6 +1538,7 @@ def process_text_for_tts(
     top_p=0.8,
     repetition_penalty=2.0,
     use_silero_vad=False,
+    job_id="",
 ):
 
 
@@ -1567,10 +1571,11 @@ def process_text_for_tts(
     print("[DEBUG] After reference number removal:", repr(text))
     _free_vram("before generation")
 
-    os.makedirs("temp", exist_ok=True)
+    job_temp = os.path.join("temp", job_id) if job_id else "temp"
+    os.makedirs(job_temp, exist_ok=True)
     os.makedirs("output", exist_ok=True)
-    for f in os.listdir("temp"):
-        os.remove(os.path.join("temp", f))
+    for f in os.listdir(job_temp):
+        os.remove(os.path.join(job_temp, f))
 
     sentences = [s for s in split_into_sentences(text) if s.strip()]
     print(f"\033[32m[DEBUG] Split text into {len(sentences)} sentences.\033[0m")
@@ -1646,7 +1651,7 @@ def process_text_for_tts(
                         model, group, idx, gen_index, this_seed,
                         audio_prompt_path_input, exaggeration_input, temperature_input, cfgw_input,
                         disable_watermark, num_candidates_per_chunk, max_attempts_per_candidate, bypass_whisper_checking,
-                        1, top_p, repetition_penalty,
+                        1, top_p, repetition_penalty, job_temp,
                     )
                     for idx, group in enumerate(sentence_groups)
                 ]
@@ -1663,7 +1668,7 @@ def process_text_for_tts(
                     model, group, idx, gen_index, this_seed,
                     audio_prompt_path_input, exaggeration_input, temperature_input, cfgw_input,
                     disable_watermark, num_candidates_per_chunk, max_attempts_per_candidate, bypass_whisper_checking,
-                    1, top_p, repetition_penalty,
+                    1, top_p, repetition_penalty, job_temp,
                 )
                 chunk_candidate_map[idx] = candidates
 
@@ -1733,7 +1738,7 @@ def process_text_for_tts(
                                 disable_watermark, num_candidates_per_chunk, 1,
                                 bypass_whisper_checking,
                                 chunk_attempts[chunk_idx] + 1,
-                                top_p, repetition_penalty,
+                                top_p, repetition_penalty, job_temp,
                             )
                             for chunk_idx in still_need_retry
                         ]
@@ -1978,6 +1983,10 @@ def process_text_for_tts(
         settings_for_json = settings_to_save.copy()
         settings_for_json["output_audio_files"] = gen_outputs
         save_settings_json(settings_for_json, json_path)
+
+    # Cleanup job-specific temp directory
+    if job_id and os.path.isdir(job_temp):
+        shutil.rmtree(job_temp, ignore_errors=True)
 
     _free_vram("after all generations")
     print(f"\033[1;36m[DEBUG] \33[6;4;3;34;102mALL GENERATIONS COMPLETE. Outputs:\033[0m\n" + "\n".join(output_paths))
