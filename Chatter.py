@@ -1570,7 +1570,12 @@ def process_text_for_tts(
     os.makedirs("temp", exist_ok=True)
     os.makedirs("output", exist_ok=True)
     for f in os.listdir("temp"):
-        os.remove(os.path.join("temp", f))
+        p = os.path.join("temp", f)
+        if os.path.isdir(p):
+            import shutil
+            shutil.rmtree(p, ignore_errors=True)
+        else:
+            os.remove(p)
 
     sentences = [s for s in split_into_sentences(text) if s.strip()]
     print(f"\033[32m[DEBUG] Split text into {len(sentences)} sentences.\033[0m")
