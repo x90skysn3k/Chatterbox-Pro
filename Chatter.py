@@ -1535,6 +1535,8 @@ def process_text_for_tts(
     top_p=0.8,
     repetition_penalty=2.0,
     use_silero_vad=False,
+    whisper_threshold=0.85,
+    cancel_check=None,
 ):
 
 
@@ -1543,6 +1545,10 @@ def process_text_for_tts(
     whisper_model = None
     if not text or len(text.strip()) == 0:
         raise ValueError("No text provided.")
+
+    def _maybe_cancel(where=""):
+        if cancel_check is not None and cancel_check():
+            raise RuntimeError(f"GENERATION_CANCELLED:{where}")
     
     # ---- NEW: Apply sound word removals/replacements ----
     if sound_words_field and sound_words_field.strip():
@@ -1570,7 +1576,12 @@ def process_text_for_tts(
     os.makedirs("temp", exist_ok=True)
     os.makedirs("output", exist_ok=True)
     for f in os.listdir("temp"):
-        os.remove(os.path.join("temp", f))
+        p = os.path.join("temp", f)
+        if os.path.isdir(p):
+            import shutil
+            shutil.rmtree(p, ignore_errors=True)
+        else:
+            os.remove(p)
 
     sentences = [s for s in split_into_sentences(text) if s.strip()]
     print(f"\033[32m[DEBUG] Split text into {len(sentences)} sentences.\033[0m")
@@ -1631,6 +1642,7 @@ def process_text_for_tts(
         set_seed(this_seed)
 
         print(f"\033[43m[DEBUG] Starting generation {gen_index+1}/{num_generations} with seed {this_seed}\033[0m")
+        _maybe_cancel("pre-generation")
 
         chunk_candidate_map = {}
         waveform_list = []  # Initialize waveform_list here to ensure it’s defined
@@ -1656,6 +1668,7 @@ def process_text_for_tts(
                     completed += 1
                     percent = int(100 * completed / total_chunks)
                     print(f"\033[36m[PROGRESS] Generated chunk {completed}/{total_chunks} ({percent}%)\033[0m")
+                    _maybe_cancel(f"chunk {completed}/{total_chunks}")
         else:
             # Sequential mode: Process chunks one by one
             for idx, group in enumerate(sentence_groups):
@@ -1666,6 +1679,9 @@ def process_text_for_tts(
                     1, top_p, repetition_penalty,
                 )
                 chunk_candidate_map[idx] = candidates
+                _maybe_cancel(f"sequential chunk {idx+1}/{len(sentence_groups)}")
+
+        _maybe_cancel("post-generation")
 
         # -------- WHISPER VALIDATION --------
         if not bypass_whisper_checking:
@@ -1697,7 +1713,7 @@ def process_text_for_tts(
                             continue
                         path, score, transcribed = whisper_check_mp(candidate_path, sentence_group, whisper_model, use_faster_whisper)
                         print(f"\033[32m[DEBUG] [Chunk {chunk_idx}] {os.path.basename(candidate_path)}: score={score:.3f}, transcript=\033[33m'{transcribed}'\033[0m")
-                        if score >= 0.85:
+                        if score >= whisper_threshold:
                             chunk_validations[chunk_idx].append((cand['duration'], cand['path'], score, len(sentence_group)))
                         else:
                             chunk_failed_candidates[chunk_idx].append((score, cand['path'], transcribed))
@@ -1752,7 +1768,7 @@ def process_text_for_tts(
                                     continue
                                 path, score, transcribed = whisper_check_mp(candidate_path, sentence_group, whisper_model, use_faster_whisper)
                                 print(f"\033[32m[DEBUG] [Chunk {chunk_idx}] RETRY {os.path.basename(candidate_path)}: score={score:.3f}, transcript=\033[33m'{transcribed}'\033[0m")
-                                if score >= 0.85:
+                                if score >= whisper_threshold:
                                     chunk_validations[chunk_idx].append((cand['duration'], cand['path'], score, len(sentence_group)))
                                 else:
                                     chunk_failed_candidates[chunk_idx].append((score, cand['path'], transcribed))

@@ -3,7 +3,10 @@ chatterbox-tts>=0.1.7
 
 # Server
 fastapi
-uvicorn
+uvicorn[standard]  # [standard] pulls in 'websockets' — /stream endpoint needs it
+
+# Scenario runner (YAML phishing/vishing scenarios)
+PyYAML
 
 # Audio post-processing (not included in chatterbox-tts)
 # NOTE: auto-editor installed separately due to dep conflicts (see Dockerfile)
