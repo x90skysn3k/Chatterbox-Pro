@@ -26,7 +26,7 @@ Schema:
       Written MSA signed 2026-03-15.
       Scope: voice phishing targeting IT helpdesk personnel.
       Contact: csirt@acme.example
-    voice: executed-edge.wav                    # optional, defaults to DEFAULT_VOICE
+    voice: my-voice.wav                         # optional, defaults to DEFAULT_VOICE
     params:                                     # optional, any TTSRequest field
       temperature: 0.75
       exaggeration: 0.65

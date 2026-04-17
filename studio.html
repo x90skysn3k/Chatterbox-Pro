@@ -363,7 +363,7 @@
     <div class="panel">
       <h2>Presets</h2>
       <div class="preset-row">
-        <input type="text" id="preset-name" placeholder="e.g., executed-edge-default">
+        <input type="text" id="preset-name" placeholder="e.g., my-voice-default">
         <button id="preset-save">Save current</button>
         <button id="preset-reset" title="Reset to production defaults">Reset</button>
       </div>
@@ -496,7 +496,7 @@ async function loadVoices() {
       sel.appendChild(opt);
     });
     if (cur && d.voices.includes(cur)) sel.value = cur;
-    else if (d.voices.includes("executed-edge.wav")) sel.value = "executed-edge.wav";
+    else if (d.voices.length) sel.value = d.voices[0];
   } catch (e) { toast("voice list failed: " + e.message, true); }
 }
 $("refresh-voices").addEventListener("click", loadVoices);
