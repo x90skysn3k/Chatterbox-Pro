@@ -1,0 +1,736 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Chatterbox Pro — Studio</title>
+<style>
+  :root {
+    --bg: #070912;
+    --bg2: #0c1020;
+    --panel: #11162a;
+    --panel-hi: #161c36;
+    --edge: #1f2747;
+    --text: #d8def0;
+    --muted: #7b86a8;
+    --cyan: #00e5ff;
+    --cyan-dim: rgba(0, 229, 255, 0.25);
+    --ok: #36d399;
+    --warn: #f5a524;
+    --err: #ef4444;
+    --accent: #8b5cf6;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    background:
+      radial-gradient(900px 500px at 10% -10%, rgba(0, 229, 255, 0.08), transparent 60%),
+      radial-gradient(700px 400px at 100% 0%, rgba(139, 92, 246, 0.07), transparent 60%),
+      var(--bg);
+    color: var(--text);
+    font: 13px/1.5 ui-monospace, "SF Mono", Menlo, monospace;
+    min-height: 100vh;
+  }
+  header {
+    padding: 14px 20px;
+    border-bottom: 1px solid var(--edge);
+    display: flex; align-items: center; gap: 14px;
+    background: linear-gradient(180deg, var(--bg2), transparent);
+  }
+  header h1 {
+    margin: 0; font-size: 14px; font-weight: 600; letter-spacing: 0.14em;
+    text-transform: uppercase; color: var(--cyan);
+    text-shadow: 0 0 18px var(--cyan-dim);
+  }
+  header .version { color: var(--muted); font-size: 11px; }
+  header .spacer { flex: 1; }
+  header .dot {
+    width: 8px; height: 8px; border-radius: 50%;
+    background: var(--muted); box-shadow: 0 0 8px currentColor;
+  }
+  header .dot.ok { background: var(--ok); color: var(--ok); }
+  header .dot.warn { background: var(--warn); color: var(--warn); }
+  header .dot.err { background: var(--err); color: var(--err); }
+  header nav a {
+    color: var(--muted); text-decoration: none; padding: 6px 10px;
+    border: 1px solid transparent; border-radius: 4px; font-size: 11px;
+    text-transform: uppercase; letter-spacing: 0.08em;
+  }
+  header nav a:hover { color: var(--text); border-color: var(--edge); }
+
+  main {
+    display: grid; grid-template-columns: 1fr 420px; gap: 0;
+    min-height: calc(100vh - 48px);
+  }
+  .col { padding: 18px 20px; }
+  .col.left { border-right: 1px solid var(--edge); }
+
+  .panel {
+    background: var(--panel);
+    border: 1px solid var(--edge);
+    border-radius: 6px;
+    padding: 14px 16px;
+    margin-bottom: 14px;
+  }
+  .panel h2 {
+    margin: 0 0 12px; font-size: 11px; letter-spacing: 0.16em;
+    text-transform: uppercase; color: var(--muted); font-weight: 600;
+    display: flex; align-items: center; gap: 8px;
+  }
+  .panel h2 .tag {
+    padding: 1px 6px; border: 1px solid var(--edge);
+    border-radius: 3px; color: var(--cyan); font-size: 9px;
+  }
+
+  textarea, input[type=text], select {
+    width: 100%; background: var(--bg2); border: 1px solid var(--edge);
+    color: var(--text); padding: 10px 12px; border-radius: 4px;
+    font: inherit; outline: none;
+  }
+  textarea:focus, input:focus, select:focus {
+    border-color: var(--cyan); box-shadow: 0 0 0 1px var(--cyan-dim);
+  }
+  textarea { resize: vertical; min-height: 120px; }
+
+  .row { display: flex; gap: 10px; align-items: center; }
+  .row > * { flex: 1; }
+  .row .narrow { flex: 0 0 auto; }
+
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px 16px; }
+
+  label { display: block; font-size: 11px; color: var(--muted); margin: 6px 0 4px; letter-spacing: 0.04em; }
+
+  .slider-row { display: grid; grid-template-columns: 1fr 60px; align-items: center; gap: 10px; }
+  .slider-row input[type=range] {
+    -webkit-appearance: none; appearance: none; width: 100%; height: 4px;
+    background: var(--edge); border-radius: 2px; outline: none;
+  }
+  .slider-row input[type=range]::-webkit-slider-thumb {
+    -webkit-appearance: none; appearance: none;
+    width: 14px; height: 14px; border-radius: 50%; background: var(--cyan);
+    box-shadow: 0 0 8px var(--cyan-dim); cursor: pointer;
+  }
+  .slider-row input[type=range]::-moz-range-thumb {
+    width: 14px; height: 14px; border-radius: 50%; background: var(--cyan);
+    box-shadow: 0 0 8px var(--cyan-dim); cursor: pointer; border: 0;
+  }
+  .slider-row .val {
+    text-align: right; font-variant-numeric: tabular-nums;
+    color: var(--cyan); font-weight: 600;
+  }
+
+  button {
+    background: transparent; border: 1px solid var(--edge);
+    color: var(--text); padding: 9px 14px; border-radius: 4px;
+    font: inherit; cursor: pointer; letter-spacing: 0.06em;
+    transition: all 0.12s ease;
+  }
+  button:hover { border-color: var(--cyan); color: var(--cyan); }
+  button.primary {
+    background: var(--cyan); color: #001219; border-color: var(--cyan);
+    font-weight: 600;
+  }
+  button.primary:hover { background: #40ecff; border-color: #40ecff; color: #001219; }
+  button.danger { border-color: rgba(239, 68, 68, 0.4); color: var(--err); }
+  button.danger:hover { border-color: var(--err); color: #fff; background: var(--err); }
+  button:disabled { opacity: 0.5; cursor: not-allowed; }
+
+  .hint { font-size: 10px; color: var(--muted); margin-top: 4px; }
+
+  .jobs-list { display: flex; flex-direction: column; gap: 8px; max-height: 620px; overflow-y: auto; }
+  .jobs-list::-webkit-scrollbar { width: 6px; }
+  .jobs-list::-webkit-scrollbar-thumb { background: var(--edge); border-radius: 3px; }
+  .job {
+    background: var(--bg2); border: 1px solid var(--edge);
+    border-radius: 4px; padding: 10px 12px; font-size: 11px;
+  }
+  .job.done { border-left: 3px solid var(--ok); }
+  .job.failed { border-left: 3px solid var(--err); }
+  .job.cancelled { border-left: 3px solid var(--warn); }
+  .job.interrupted { border-left: 3px solid var(--warn); }
+  .job.processing { border-left: 3px solid var(--cyan); }
+  .job .hdr {
+    display: flex; justify-content: space-between; align-items: center;
+    gap: 10px; margin-bottom: 6px;
+  }
+  .job .jid { color: var(--cyan); font-weight: 600; letter-spacing: 0.05em; }
+  .job .status {
+    text-transform: uppercase; font-size: 9px; letter-spacing: 0.1em;
+    padding: 2px 6px; border-radius: 3px; border: 1px solid var(--edge);
+  }
+  .job .status.done { color: var(--ok); border-color: rgba(54,211,153,0.4); }
+  .job .status.failed { color: var(--err); border-color: rgba(239,68,68,0.4); }
+  .job .status.cancelled { color: var(--warn); border-color: rgba(245,165,36,0.4); }
+  .job .status.interrupted { color: var(--warn); border-color: rgba(245,165,36,0.4); }
+  .job .status.processing { color: var(--cyan); border-color: var(--cyan-dim); animation: pulse 2s infinite; }
+  @keyframes pulse { 0%,100%{opacity:1;} 50%{opacity:0.5;} }
+  .job .text { color: var(--muted); font-size: 10px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .job .meta { display: flex; gap: 10px; font-size: 10px; color: var(--muted); margin-top: 4px; flex-wrap: wrap; }
+  .job .meta .eng { color: var(--accent); }
+  .job .actions { display: flex; gap: 6px; margin-top: 8px; }
+  .job .actions button { padding: 4px 8px; font-size: 10px; }
+  .job .bar { height: 3px; background: var(--edge); border-radius: 2px; margin-top: 6px; overflow: hidden; }
+  .job .bar > div { height: 100%; background: var(--cyan); transition: width 0.4s ease; }
+
+  .voice-row { display: grid; grid-template-columns: 1fr auto; gap: 8px; }
+  .preset-row { display: grid; grid-template-columns: 1fr auto auto; gap: 8px; }
+
+  .presets { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+  .preset-chip {
+    padding: 3px 8px; font-size: 10px; border: 1px solid var(--edge);
+    border-radius: 3px; cursor: pointer; color: var(--muted);
+  }
+  .preset-chip:hover { border-color: var(--cyan); color: var(--cyan); }
+  .preset-chip.active { border-color: var(--cyan); color: var(--cyan); background: var(--panel-hi); }
+  .preset-chip .x { color: var(--muted); margin-left: 4px; font-size: 11px; }
+
+  .player {
+    background: var(--bg2); border: 1px solid var(--edge);
+    border-radius: 4px; padding: 10px; margin-top: 10px;
+  }
+  audio { width: 100%; height: 32px; }
+
+  .toast {
+    position: fixed; bottom: 20px; right: 20px; z-index: 999;
+    background: var(--panel); border: 1px solid var(--cyan);
+    border-radius: 4px; padding: 10px 14px; font-size: 12px;
+    box-shadow: 0 0 20px var(--cyan-dim);
+    opacity: 0; transform: translateY(10px);
+    transition: all 0.2s ease;
+  }
+  .toast.show { opacity: 1; transform: translateY(0); }
+  .toast.err { border-color: var(--err); box-shadow: 0 0 20px rgba(239,68,68,0.25); }
+
+  .modes {
+    display: flex; gap: 4px; background: var(--bg2); padding: 3px;
+    border-radius: 4px; border: 1px solid var(--edge);
+  }
+  .modes button {
+    flex: 1; border: 0; background: transparent; padding: 6px 10px;
+    font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase;
+    color: var(--muted);
+  }
+  .modes button.active { background: var(--panel-hi); color: var(--cyan); }
+  .modes button:hover:not(.active) { color: var(--text); }
+
+  details > summary { cursor: pointer; list-style: none; color: var(--muted); font-size: 11px; padding: 4px 0; }
+  details > summary::-webkit-details-marker { display: none; }
+  details > summary::before { content: "▸ "; color: var(--cyan); }
+  details[open] > summary::before { content: "▾ "; }
+
+  .small { font-size: 10px; color: var(--muted); }
+  .kbd {
+    font-family: ui-monospace, Menlo, monospace;
+    background: var(--bg2); border: 1px solid var(--edge);
+    padding: 1px 5px; border-radius: 3px; font-size: 10px;
+  }
+</style>
+</head>
+<body>
+<header>
+  <h1>Chatterbox Studio</h1>
+  <span class="version" id="version">—</span>
+  <span class="spacer"></span>
+  <span class="dot" id="health-dot" title="server health"></span>
+  <span class="small" id="health-text">connecting…</span>
+  <nav>
+    <a href="/stream-test">Stream</a>
+    <a href="/health">Health</a>
+  </nav>
+</header>
+
+<main>
+  <div class="col left">
+
+    <div class="panel">
+      <h2>Text <span class="tag" id="char-count">0 chars</span></h2>
+      <textarea id="text" placeholder="Type the narration. Keep sentences punchy. ALL CAPS garbles — use lowercase. Spell out percent / $ / numbers. Contractions (don't, can't) are fine."></textarea>
+      <div class="row" style="margin-top: 10px;">
+        <button id="submit" class="primary">▶ Generate</button>
+        <button id="stream-btn" title="Fast streaming via Turbo — bypasses /tts pipeline">⚡ Stream (Turbo)</button>
+        <button id="cancel-latest" class="danger narrow" title="Cancel the most recent job">✕ Cancel last</button>
+      </div>
+      <div class="hint"><span class="kbd">⌘↩</span> to submit</div>
+    </div>
+
+    <div class="panel">
+      <h2>Voice &amp; Model</h2>
+      <div class="voice-row">
+        <select id="voice"></select>
+        <button id="refresh-voices" title="Refresh voice list">↻</button>
+      </div>
+      <label>Upload a reference clip (5–30s clean speech)</label>
+      <div class="voice-row">
+        <input type="file" id="voice-file" accept=".wav,.mp3,.flac" style="padding: 8px;" />
+        <button id="voice-upload">Upload</button>
+      </div>
+      <div id="voice-waveform" class="hint" style="margin-top:10px;"></div>
+
+      <label style="margin-top: 14px;">Model</label>
+      <div class="modes" id="model-modes">
+        <button data-model="standard" class="active">Standard</button>
+        <button data-model="turbo">Turbo</button>
+        <button data-model="multilingual">Multilingual</button>
+        <button data-model="hf-800m">HF-800M</button>
+      </div>
+      <div class="hint">Production narrations: <b>standard</b>. Live streaming: <b>turbo</b>.</div>
+    </div>
+
+    <div class="panel">
+      <h2>Voice Parameters</h2>
+      <div class="grid2">
+        <div>
+          <label>Temperature <span class="small">— variance</span></label>
+          <div class="slider-row">
+            <input type="range" id="temperature" min="0.1" max="1.5" step="0.05" value="0.75">
+            <div class="val" id="temperature-v">0.75</div>
+          </div>
+        </div>
+        <div>
+          <label>Exaggeration <span class="small">— drama</span></label>
+          <div class="slider-row">
+            <input type="range" id="exaggeration" min="0.3" max="1.2" step="0.05" value="0.65">
+            <div class="val" id="exaggeration-v">0.65</div>
+          </div>
+        </div>
+        <div>
+          <label>CFG weight <span class="small">— pacing</span></label>
+          <div class="slider-row">
+            <input type="range" id="cfg_weight" min="0.1" max="1.0" step="0.05" value="0.4">
+            <div class="val" id="cfg_weight-v">0.40</div>
+          </div>
+        </div>
+        <div>
+          <label>Top-p <span class="small">— nucleus</span></label>
+          <div class="slider-row">
+            <input type="range" id="top_p" min="0.1" max="1.0" step="0.05" value="0.8">
+            <div class="val" id="top_p-v">0.80</div>
+          </div>
+        </div>
+        <div>
+          <label>Repetition penalty</label>
+          <div class="slider-row">
+            <input type="range" id="repetition_penalty" min="1.0" max="3.0" step="0.1" value="2.0">
+            <div class="val" id="repetition_penalty-v">2.0</div>
+          </div>
+        </div>
+        <div>
+          <label>Whisper threshold <span class="small">— 0.85 default</span></label>
+          <div class="slider-row">
+            <input type="range" id="whisper_threshold" min="0.5" max="0.99" step="0.01" value="0.85">
+            <div class="val" id="whisper_threshold-v">0.85</div>
+          </div>
+        </div>
+      </div>
+
+      <details style="margin-top:12px;">
+        <summary>Advanced</summary>
+        <div class="grid2" style="margin-top:8px;">
+          <div>
+            <label>Candidates / chunk</label>
+            <input type="text" id="num_candidates" value="2">
+          </div>
+          <div>
+            <label>Max attempts</label>
+            <input type="text" id="max_attempts" value="3">
+          </div>
+          <div>
+            <label>Seed <span class="small">(0 = random)</span></label>
+            <input type="text" id="seed" value="0">
+          </div>
+          <div>
+            <label>Engagement ID <span class="small">(offsec audit)</span></label>
+            <input type="text" id="engagement_id" placeholder="ACME-2026-Q2" />
+          </div>
+          <div>
+            <label>Silero VAD</label>
+            <select id="use_silero_vad">
+              <option value="true" selected>on (default)</option>
+              <option value="false">off (auto-editor)</option>
+            </select>
+          </div>
+          <div>
+            <label>Apply watermark</label>
+            <select id="apply_watermark">
+              <option value="false" selected>no</option>
+              <option value="true">yes</option>
+            </select>
+          </div>
+        </div>
+      </details>
+    </div>
+
+    <div class="panel">
+      <h2>Presets</h2>
+      <div class="preset-row">
+        <input type="text" id="preset-name" placeholder="e.g., executed-edge-default">
+        <button id="preset-save">Save current</button>
+        <button id="preset-reset" title="Reset to production defaults">Reset</button>
+      </div>
+      <div class="presets" id="preset-list"></div>
+      <div class="hint">Stored in browser localStorage. Built-in: <b>production</b>, <b>punchy</b>, <b>calm</b>, <b>dramatic</b>.</div>
+    </div>
+
+  </div>
+
+  <div class="col right">
+    <div class="panel">
+      <h2>Jobs <span class="tag" id="jobs-tag">—</span></h2>
+      <div class="row" style="margin-bottom: 10px;">
+        <input type="text" id="filter-engagement" placeholder="Filter by engagement ID…" style="flex:1;">
+        <button id="refresh-jobs" class="narrow">↻</button>
+      </div>
+      <div class="jobs-list" id="jobs"></div>
+    </div>
+
+    <div class="panel">
+      <h2>Shortcuts</h2>
+      <div class="small">
+        <p><span class="kbd">⌘↩</span> generate<br>
+        <span class="kbd">⌘⇧↩</span> stream (Turbo)<br>
+        <span class="kbd">⌘K</span> focus text</p>
+      </div>
+    </div>
+  </div>
+</main>
+
+<div class="toast" id="toast"></div>
+
+<script>
+// ---------- Config ----------
+const PARAM_IDS = ["temperature","exaggeration","cfg_weight","top_p","repetition_penalty","whisper_threshold"];
+const BUILTIN_PRESETS = {
+  production: { temperature:0.75, exaggeration:0.65, cfg_weight:0.4, top_p:0.8, repetition_penalty:2.0, whisper_threshold:0.85 },
+  punchy:     { temperature:0.80, exaggeration:0.75, cfg_weight:0.5, top_p:0.85, repetition_penalty:2.0, whisper_threshold:0.80 },
+  calm:       { temperature:0.65, exaggeration:0.55, cfg_weight:0.35, top_p:0.75, repetition_penalty:2.0, whisper_threshold:0.88 },
+  dramatic:   { temperature:0.85, exaggeration:0.85, cfg_weight:0.55, top_p:0.90, repetition_penalty:2.2, whisper_threshold:0.80 },
+};
+
+// ---------- Helpers ----------
+const $ = (id) => document.getElementById(id);
+function toast(msg, isErr=false) {
+  const t = $("toast");
+  t.textContent = msg;
+  t.className = "toast show" + (isErr ? " err" : "");
+  clearTimeout(t._to);
+  t._to = setTimeout(() => t.classList.remove("show"), 2500);
+}
+function apiKey() { return localStorage.getItem("chatterbox_api_key") || ""; }
+function headers(isJson=true) {
+  const h = {};
+  if (isJson) h["Content-Type"] = "application/json";
+  const k = apiKey();
+  if (k) h["X-API-Key"] = k;
+  return h;
+}
+function el(tag, props={}, ...children) {
+  const e = document.createElement(tag);
+  for (const k in props) {
+    if (k === "class") e.className = props[k];
+    else if (k === "dataset") Object.assign(e.dataset, props[k]);
+    else if (k === "text") e.textContent = props[k];
+    else if (k === "style") e.setAttribute("style", props[k]);
+    else if (k.startsWith("on")) e.addEventListener(k.slice(2).toLowerCase(), props[k]);
+    else e.setAttribute(k, props[k]);
+  }
+  for (const c of children) {
+    if (c == null) continue;
+    e.appendChild(typeof c === "string" ? document.createTextNode(c) : c);
+  }
+  return e;
+}
+
+// ---------- Parameter state ----------
+function bindSliders() {
+  PARAM_IDS.forEach(id => {
+    const el = $(id), v = $(id + "-v");
+    const upd = () => {
+      const num = parseFloat(el.value);
+      v.textContent = num.toFixed(2);
+    };
+    el.addEventListener("input", upd);
+    upd();
+  });
+}
+function currentParams() {
+  const p = {};
+  PARAM_IDS.forEach(id => p[id] = parseFloat($(id).value));
+  p.num_candidates = parseInt($("num_candidates").value) || 2;
+  p.max_attempts = parseInt($("max_attempts").value) || 3;
+  p.seed = parseInt($("seed").value) || 0;
+  p.engagement_id = $("engagement_id").value.trim() || null;
+  p.use_silero_vad = $("use_silero_vad").value === "true";
+  p.apply_watermark = $("apply_watermark").value === "true";
+  p.model = document.querySelector("#model-modes button.active").dataset.model;
+  p.predefined_voice_id = $("voice").value;
+  return p;
+}
+function applyParams(p) {
+  PARAM_IDS.forEach(id => {
+    if (p[id] !== undefined) {
+      $(id).value = p[id];
+      $(id + "-v").textContent = parseFloat(p[id]).toFixed(2);
+    }
+  });
+}
+
+// ---------- Model selector ----------
+document.querySelectorAll("#model-modes button").forEach(b => {
+  b.addEventListener("click", () => {
+    document.querySelectorAll("#model-modes button").forEach(x => x.classList.remove("active"));
+    b.classList.add("active");
+  });
+});
+
+// ---------- Voices ----------
+async function loadVoices() {
+  try {
+    const r = await fetch("/voices", { headers: headers(false) });
+    const d = await r.json();
+    const sel = $("voice");
+    const cur = sel.value;
+    sel.replaceChildren();
+    (d.voices || []).forEach(v => {
+      const opt = document.createElement("option");
+      opt.value = v; opt.textContent = v;
+      sel.appendChild(opt);
+    });
+    if (cur && d.voices.includes(cur)) sel.value = cur;
+    else if (d.voices.includes("executed-edge.wav")) sel.value = "executed-edge.wav";
+  } catch (e) { toast("voice list failed: " + e.message, true); }
+}
+$("refresh-voices").addEventListener("click", loadVoices);
+$("voice-upload").addEventListener("click", async () => {
+  const f = $("voice-file").files[0];
+  if (!f) { toast("pick a file first", true); return; }
+  const fd = new FormData();
+  fd.append("file", f);
+  const h = {};
+  const k = apiKey(); if (k) h["X-API-Key"] = k;
+  const r = await fetch("/upload-voice", { method: "POST", body: fd, headers: h });
+  if (r.ok) { toast("uploaded " + f.name); await loadVoices(); $("voice").value = f.name; }
+  else { toast("upload failed: " + r.status, true); }
+});
+
+$("voice-file").addEventListener("change", () => {
+  const f = $("voice-file").files[0];
+  if (!f) { $("voice-waveform").textContent = ""; return; }
+  $("voice-waveform").textContent = `${f.name} · ${(f.size/1024).toFixed(0)} KB — upload to activate`;
+});
+
+// ---------- Submit ----------
+let latestJobId = null;
+
+async function submitJob() {
+  const text = $("text").value.trim();
+  if (!text) { toast("enter text first", true); return; }
+  const body = Object.assign({ text }, currentParams());
+  try {
+    const r = await fetch("/tts", { method: "POST", headers: headers(), body: JSON.stringify(body) });
+    if (!r.ok) { toast(`submit failed: ${r.status}`, true); return; }
+    const d = await r.json();
+    latestJobId = d.job_id;
+    toast(`queued: ${d.job_id}`);
+    refreshJobs();
+  } catch (e) { toast("submit error: " + e.message, true); }
+}
+$("submit").addEventListener("click", submitJob);
+
+$("cancel-latest").addEventListener("click", async () => {
+  if (!latestJobId) { toast("no recent job to cancel", true); return; }
+  const r = await fetch(`/cancel/${encodeURIComponent(latestJobId)}`, { method: "POST", headers: headers() });
+  if (r.ok) toast(`cancel requested: ${latestJobId}`);
+  else toast(`cancel failed: ${r.status}`, true);
+});
+
+$("stream-btn").addEventListener("click", () => {
+  window.open("/stream-test", "_blank");
+});
+
+// ---------- Jobs dashboard ----------
+// Build DOM imperatively (no innerHTML on untrusted strings) — every text value
+// from the API goes through textContent via el().
+let jobsPollTimer = null;
+
+function renderJob(j) {
+  const statusClass = j.status || "processing";
+  const elapsed = j.elapsed_seconds != null
+    ? (typeof j.elapsed_seconds === "number" ? j.elapsed_seconds.toFixed(1) : j.elapsed_seconds) + "s"
+    : "—";
+  const preview = (j.text_preview || j.error || "—").slice(0, 90);
+  const pctNum = j.progress_pct ? parseInt(j.progress_pct) || 0 : 0;
+  const canDownload = (j.status === "done") && j.has_output !== false;
+  const canCancel = (j.status === "processing" || j.status === "queued");
+
+  const metaChildren = [];
+  if (j.stage) metaChildren.push(el("span", { text: j.stage }));
+  if (j.chunk) metaChildren.push(el("span", { text: "chunk " + j.chunk }));
+  metaChildren.push(el("span", { text: elapsed }));
+  if (j.engagement_id) metaChildren.push(el("span", { class: "eng", text: "◆ " + j.engagement_id }));
+
+  const actionChildren = [];
+  if (canDownload) {
+    actionChildren.push(el("button", { dataset: { action: "download", jid: j.job_id }, text: "⇩ Download" }));
+    actionChildren.push(el("button", { dataset: { action: "preview", jid: j.job_id }, text: "▶ Preview" }));
+  }
+  if (canCancel) {
+    actionChildren.push(el("button", { class: "danger", dataset: { action: "cancel", jid: j.job_id }, text: "✕ Cancel" }));
+  }
+
+  const barChildren = [];
+  if (pctNum > 0) {
+    barChildren.push(el("div", { class: "bar" }, el("div", { style: `width:${pctNum}%` })));
+  }
+
+  return el("div", { class: "job " + statusClass, dataset: { jid: j.job_id } },
+    el("div", { class: "hdr" },
+      el("span", { class: "jid", text: j.job_id }),
+      el("span", { class: "status " + statusClass, text: statusClass }),
+    ),
+    el("div", { class: "text", text: preview }),
+    el("div", { class: "meta" }, ...metaChildren),
+    ...barChildren,
+    el("div", { class: "actions" }, ...actionChildren),
+    el("div", { id: "player-" + j.job_id }),
+  );
+}
+
+async function refreshJobs() {
+  const eng = $("filter-engagement").value.trim();
+  const q = new URLSearchParams();
+  if (eng) q.set("engagement_id", eng);
+  q.set("limit", "50");
+  try {
+    const r = await fetch("/jobs?" + q.toString(), { headers: headers(false) });
+    if (!r.ok) return;
+    const d = await r.json();
+    $("jobs-tag").textContent = `${d.count} total`;
+    const active = (d.jobs || []).filter(j => j.status === "processing").length;
+
+    const container = $("jobs");
+    container.replaceChildren();
+    if (!d.jobs || d.jobs.length === 0) {
+      container.appendChild(el("div", { class: "small", style: "padding:20px;text-align:center;", text: "no jobs yet" }));
+    } else {
+      d.jobs.forEach(j => container.appendChild(renderJob(j)));
+    }
+    schedulePoll(active > 0 ? 1500 : 4000);
+  } catch (e) { /* silent */ }
+}
+function schedulePoll(ms) {
+  clearTimeout(jobsPollTimer);
+  jobsPollTimer = setTimeout(refreshJobs, ms);
+}
+
+$("jobs").addEventListener("click", async (e) => {
+  const btn = e.target.closest("button[data-action]");
+  if (!btn) return;
+  const jid = btn.dataset.jid;
+  const act = btn.dataset.action;
+  if (act === "download" || act === "preview") {
+    const r = await fetch(`/result/${encodeURIComponent(jid)}?keep=true`, { headers: headers(false) });
+    if (!r.ok) { toast(`fetch failed: ${r.status}`, true); return; }
+    const blob = await r.blob();
+    if (act === "download") {
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+      a.download = `${jid}.wav`;
+      a.click();
+      toast("download started");
+    } else {
+      const slot = $("player-" + jid);
+      slot.replaceChildren(el("div", { class: "player" },
+        el("audio", { controls: "", src: URL.createObjectURL(blob) })));
+    }
+  } else if (act === "cancel") {
+    const r = await fetch(`/cancel/${encodeURIComponent(jid)}`, { method: "POST", headers: headers() });
+    if (r.ok) toast(`cancel requested: ${jid}`);
+    else toast(`cancel failed: ${r.status}`, true);
+    refreshJobs();
+  }
+});
+
+$("refresh-jobs").addEventListener("click", refreshJobs);
+$("filter-engagement").addEventListener("change", refreshJobs);
+
+// ---------- Presets ----------
+function loadPresets() {
+  let user = {};
+  try { user = JSON.parse(localStorage.getItem("chatterbox_presets") || "{}"); } catch {}
+  const all = Object.assign({}, BUILTIN_PRESETS, user);
+  const list = $("preset-list");
+  list.replaceChildren();
+  Object.keys(all).forEach(name => {
+    const chip = el("span", { class: "preset-chip", text: name,
+      onclick: () => { applyParams(all[name]); toast(`preset: ${name}`); } });
+    if (!BUILTIN_PRESETS[name]) {
+      chip.appendChild(el("span", { class: "x", text: "×",
+        onclick: (e) => {
+          e.stopPropagation();
+          delete user[name];
+          localStorage.setItem("chatterbox_presets", JSON.stringify(user));
+          loadPresets();
+        }
+      }));
+    }
+    list.appendChild(chip);
+  });
+}
+$("preset-save").addEventListener("click", () => {
+  const name = $("preset-name").value.trim();
+  if (!name) { toast("name required", true); return; }
+  if (BUILTIN_PRESETS[name]) { toast("reserved name", true); return; }
+  let user = {};
+  try { user = JSON.parse(localStorage.getItem("chatterbox_presets") || "{}"); } catch {}
+  user[name] = currentParams();
+  localStorage.setItem("chatterbox_presets", JSON.stringify(user));
+  $("preset-name").value = "";
+  loadPresets();
+  toast(`saved: ${name}`);
+});
+$("preset-reset").addEventListener("click", () => { applyParams(BUILTIN_PRESETS.production); toast("defaults restored"); });
+
+// ---------- Health ----------
+async function refreshHealth() {
+  try {
+    const r = await fetch("/health");
+    const d = await r.json();
+    $("version").textContent = "v" + d.version;
+    const dot = $("health-dot");
+    let cls = "ok";
+    let text = "online";
+    if (d.vram && d.vram.used_pct) text += ` · vram ${d.vram.used_pct}%`;
+    if (d.vram && d.vram.used_pct > 85) { cls = "warn"; text += " · watch"; }
+    if (d.vram && d.vram.used_pct > 95) cls = "err";
+    dot.className = "dot " + cls;
+    $("health-text").textContent = text;
+  } catch (e) {
+    $("health-dot").className = "dot err";
+    $("health-text").textContent = "offline";
+  }
+}
+
+// ---------- Keyboard ----------
+document.addEventListener("keydown", (e) => {
+  if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
+    e.preventDefault();
+    if (e.shiftKey) $("stream-btn").click(); else submitJob();
+  }
+  if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
+    e.preventDefault(); $("text").focus();
+  }
+});
+$("text").addEventListener("input", () => {
+  $("char-count").textContent = $("text").value.length + " chars";
+});
+
+// ---------- Boot ----------
+bindSliders();
+loadVoices();
+loadPresets();
+refreshHealth();
+refreshJobs();
+setInterval(refreshHealth, 15000);
+</script>
+</body>
+</html>
